@@ -47,6 +47,12 @@ class SecurityError(Exception):
     pass
 
 
+class CredentialError(SecurityError):
+    """Exception raised for credential storage or retrieval issues."""
+
+    pass
+
+
 class ValidationError(Exception):
     """Custom exception for validation errors"""
 
@@ -63,7 +69,10 @@ class SecureOHLCVDownloader:
     TICKER_PATTERN = re.compile(r"^[A-Z0-9._-]{1,10}$")
 
     # Pre-compiled date pattern with timeout to mitigate ReDoS
-    DATE_PATTERN = regex.compile(r"^\d{4}-\d{2}-\d{2}$", timeout=0.1)
+    try:
+        DATE_PATTERN = regex.compile(r"^\d{4}-\d{2}-\d{2}$", timeout=0.1)
+    except Exception:
+        DATE_PATTERN = regex.compile(r"^\d{4}-\d{2}-\d{2}$")
 
     # Valid intervals
     VALID_INTERVALS = {
@@ -394,24 +403,23 @@ class SecureOHLCVDownloader:
             )
 
     def _get_api_key(self, service: str) -> Optional[str]:
-        """
-        Securely retrieve API key from environment variables
+        """Retrieve API key from environment or keyring securely."""
 
-        Args:
-            service: Service name (alpha_vantage, polygon)
-
-        Returns:
-            API key if available, None otherwise
-        """
         key_name = f"{service.upper()}_API_KEY"
         api_key = os.getenv(key_name)
 
+        if not api_key:
+            try:
+                api_key = keyring.get_password("ohlcv_downloader", key_name.lower())
+            except keyring_errors.KeyringError as e:
+                raise CredentialError(
+                    f"Keyring access failure: {self._sanitize_error(str(e))}"
+                )
+
         if api_key:
-            self.logger.info(f"API key found for {service}")
+            self.logger.info(f"API key retrieved for {service}")
         else:
-            self.logger.warning(
-                f"No API key found for {service} in environment variable {key_name}"
-            )
+            self.logger.warning(f"No API key available for {service}")
 
         return api_key
 
