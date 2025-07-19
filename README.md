@@ -25,14 +25,14 @@ A comprehensive Python application for downloading OHLCV (Open, High, Low, Close
 ### 1. Clone or Download the Files
 
 Download the following files to your project directory:
-- `ohlcv_downloader.py` (GUI version)
-- `ohlcv_cli.py` (Command-line version)
-- `requirements.txt`
+- `secure_ohlcv_downloader.py` (GUI version)
+- `secure_ohlcv_cli.py` (Command-line version)
+- `requirements-secure.txt`
 
 ### 2. Install Dependencies
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-secure.txt
 ```
 
 Or install manually:
@@ -59,7 +59,7 @@ pip install pandas yfinance alpha-vantage requests python-dotenv matplotlib plot
 
 Run the graphical interface:
 ```bash
-python ohlcv_downloader.py
+python secure_ohlcv_downloader.py
 ```
 
 **GUI Features:**
@@ -74,31 +74,31 @@ python ohlcv_downloader.py
 #### Basic Usage
 ```bash
 # Download AAPL data from Yahoo Finance (default)
-python ohlcv_cli.py AAPL
+python secure_ohlcv_cli.py AAPL
 
 # Download with specific timeframe
-python ohlcv_cli.py AAPL --timeframe 1h
+python secure_ohlcv_cli.py AAPL --timeframe 1h
 
 # Download with custom date range
-python ohlcv_cli.py TSLA --start 2023-01-01 --end 2023-12-31
+python secure_ohlcv_cli.py TSLA --start 2023-01-01 --end 2023-12-31
 ```
 
 #### Advanced Usage
 ```bash
 # Download from all sources
-python ohlcv_cli.py MSFT --source all --timeframe 1d
+python secure_ohlcv_cli.py MSFT --source all --timeframe 1d
 
 # Use Alpha Vantage with API key
-python ohlcv_cli.py GOOGL --source alpha_vantage --alpha-key YOUR_API_KEY
+python secure_ohlcv_cli.py GOOGL --source alpha_vantage --alpha-key YOUR_API_KEY
 
 # Use Polygon with API key for intraday data
-python ohlcv_cli.py NVDA --source polygon --polygon-key YOUR_API_KEY --timeframe 5m
+python secure_ohlcv_cli.py NVDA --source polygon --polygon-key YOUR_API_KEY --timeframe 5m
 
 # Verbose logging
-python ohlcv_cli.py AAPL --verbose
+python secure_ohlcv_cli.py AAPL --verbose
 
 # Custom output directory
-python ohlcv_cli.py AAPL --output-dir /path/to/custom/directory
+python secure_ohlcv_cli.py AAPL --output-dir /path/to/custom/directory
 ```
 
 #### Command-Line Options
@@ -140,7 +140,7 @@ data/
 ├── TSLA/
 │   └── 2024-01-01_to_2024-01-31/
 │       └── ...
-└── downloader.log
+└── secure_downloader.log
 ```
 
 ### CSV File Format
@@ -217,7 +217,7 @@ The application handles various error scenarios:
 
 ## 📝 Logging
 
-Logs are saved to `downloader.log` and include:
+Logs are saved to `secure_downloader.log` and include:
 - Download start/completion times
 - Success/failure status for each source
 - Error messages and stack traces
@@ -229,7 +229,7 @@ Logs are saved to `downloader.log` and include:
 ### Common Issues
 
 1. **"No display name and no $DISPLAY environment variable"**
-   - Use the CLI version: `python ohlcv_cli.py`
+   - Use the CLI version: `python secure_ohlcv_cli.py`
    - Or run on a system with GUI support
 
 2. **"API key required"**
@@ -250,7 +250,7 @@ Logs are saved to `downloader.log` and include:
 
 Enable verbose logging for detailed information:
 ```bash
-python ohlcv_cli.py AAPL --verbose
+python secure_ohlcv_cli.py AAPL --verbose
 ```
 
 ## 🤝 Contributing
