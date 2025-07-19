@@ -24,6 +24,13 @@ from keyring import errors as keyring_errors
 import keyring
 from keyrings.alt.file import PlaintextKeyring
 from dotenv import load_dotenv
+import tempfile
+import shutil
+
+if os.name == "posix":
+    import fcntl
+else:
+    import msvcrt
 
 # Load environment variables
 load_dotenv()
@@ -355,20 +362,41 @@ class SecureOHLCVDownloader:
         Raises:
             SecurityError: If path is outside allowed directory
         """
-        # Create path components
-        ticker_dir = self.output_dir / "data" / ticker / date_range
+        # Build target path and validate
+        output_root = self.output_dir.resolve()
+        target_dir = output_root / "data" / ticker / date_range
+        resolved_target = target_dir.resolve()
 
-        # Resolve path and validate it's within output directory
-        resolved_path = ticker_dir.resolve()
+        if not str(resolved_target).startswith(str(output_root)):
+            raise SecurityError("Path traversal attempt detected before creation")
 
-        if not str(resolved_path).startswith(str(self.output_dir.resolve())):
-            raise SecurityError("Path traversal attempt detected")
+        tmp_dir = Path(tempfile.mkdtemp(dir=str(output_root)))
+        lock_path = output_root / ".dirlock"
 
-        # Create directory with secure permissions
-        resolved_path.mkdir(parents=True, exist_ok=True)
-        os.chmod(resolved_path, 0o700)
+        lock_file = open(lock_path, "w")
+        try:
+            if os.name == "posix":
+                fcntl.flock(lock_file, fcntl.LOCK_EX)
+            else:
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
 
-        return resolved_path
+            target_dir.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(tmp_dir, target_dir)
+
+            final_resolved = target_dir.resolve()
+            if not str(final_resolved).startswith(str(output_root)):
+                raise SecurityError("Path traversal attempt detected after creation")
+
+            os.chmod(target_dir, 0o700)
+        finally:
+            if os.name == "posix":
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+            else:
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            lock_file.close()
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        return target_dir
 
     def _validate_date_key(self, key: str) -> None:
         """Validate date keys to mitigate ReDoS attacks."""
