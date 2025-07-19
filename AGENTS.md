@@ -300,27 +300,249 @@ How this fix addresses SOX/GDPR/PCI-DSS requirements.
 Any changes that might affect existing usage.
 ```
 
-## Dependencies and Libraries
+## Environment Setup and Dependencies
 
-### Required Security Libraries
-```python
-# Add to requirements.txt
-keyring>=24.0.0          # Secure credential storage
-cryptography>=41.0.0     # Enhanced crypto operations
-requests[security]>=2.31.0  # SSL/TLS improvements
-regex>=2023.0.0          # ReDoS protection with timeouts
-psutil>=5.9.0           # Memory monitoring
-pydantic>=2.0.0         # Enhanced input validation
+### Python Environment Requirements
+**Critical**: Proper environment setup is essential for security library installation.
+
+**Python Version**: 3.9+ (recommended: 3.11 or 3.12)
+**Required System Libraries**: 
+- Linux/macOS: `build-essential`, `libffi-dev`, `libssl-dev`
+- Windows: Microsoft Visual C++ Build Tools
+
+### Environment Setup Instructions
+
+#### Option 1: Virtual Environment (Recommended)
+```bash
+# Create fresh virtual environment
+python -m venv venv_secure_ohlcv
+source venv_secure_ohlcv/bin/activate  # Linux/macOS
+# OR
+venv_secure_ohlcv\Scripts\activate     # Windows
+
+# Upgrade core tools FIRST to prevent build issues
+pip install --upgrade pip setuptools wheel
+
+# Install build dependencies
+pip install --upgrade build packaging
 ```
 
-### Development Dependencies
+#### Option 2: pyenv with Virtual Environment
+```bash
+# Install specific Python version
+pyenv install 3.12.10
+pyenv virtualenv 3.12.10 secure-ohlcv
+pyenv activate secure-ohlcv
+
+# Upgrade core tools
+pip install --upgrade pip setuptools wheel build
+```
+
+### Dependency Installation Strategy
+
+#### Phase 1: Core Build Tools (Install First)
+```bash
+# Essential build tools - install before anything else
+pip install --upgrade pip>=24.0
+pip install --upgrade setuptools>=70.0.0
+pip install --upgrade wheel>=0.44.0
+pip install --upgrade build>=1.0.0
+
+# Verify installation
+python -c "import setuptools; print(f'setuptools: {setuptools.__version__}')"
+python -c "import wheel; print(f'wheel: {wheel.__version__}')"
+```
+
+#### Phase 2: System Dependencies (Platform-Specific)
+```bash
+# Ubuntu/Debian
+sudo apt-get update
+sudo apt-get install build-essential libffi-dev libssl-dev python3-dev
+
+# CentOS/RHEL
+sudo yum install gcc openssl-devel libffi-devel python3-devel
+
+# macOS (with Homebrew)
+brew install libffi openssl
+export LDFLAGS="-L$(brew --prefix libffi)/lib -L$(brew --prefix openssl)/lib"
+export CPPFLAGS="-I$(brew --prefix libffi)/include -I$(brew --prefix openssl)/include"
+
+# Windows
+# Install Microsoft Visual C++ Build Tools from official Microsoft site
+```
+
+#### Phase 3: Cryptography Dependencies (Special Handling)
+```bash
+# Install Rust compiler for cryptography>=3.4
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+
+# Alternative: Use pre-compiled wheels
+pip install --only-binary=cryptography cryptography>=41.0.0
+```
+
+#### Phase 4: Security Libraries (Careful Installation)
 ```python
-# Add to requirements-dev.txt
+# requirements.txt - Install in this exact order
+setuptools>=70.0.0
+wheel>=0.44.0
+pip>=24.0
+
+# Core security libraries
+cryptography>=41.0.0     # Enhanced crypto operations
+keyring>=24.0.0          # Secure credential storage
+requests[security]>=2.31.0  # SSL/TLS improvements
+
+# Validation and monitoring
+pydantic>=2.0.0         # Enhanced input validation
+psutil>=5.9.0           # Memory monitoring
+regex>=2023.0.0         # ReDoS protection with timeouts
+
+# Existing project dependencies
+pandas>=2.0.0
+jsonschema>=4.0.0
+```
+
+#### Phase 5: Development Dependencies
+```python
+# requirements-dev.txt
+pytest>=7.0.0           # Testing framework
+pytest-cov>=4.0.0      # Coverage reporting
 safety>=2.3.0           # Vulnerability scanning
 bandit>=1.7.0           # Security linting
-pytest-cov>=4.0.0      # Coverage reporting
 mypy>=1.0.0             # Type checking
 black>=23.0.0           # Code formatting
+flake8>=6.0.0           # Linting
+pre-commit>=3.0.0       # Git hooks
+```
+
+### Installation Commands (Execute in Order)
+```bash
+# 1. Clean installation
+pip uninstall -y setuptools wheel pip
+pip install --upgrade pip setuptools wheel
+
+# 2. Install core requirements
+pip install --upgrade -r requirements.txt
+
+# 3. Install development tools
+pip install --upgrade -r requirements-dev.txt
+
+# 4. Verify critical security libraries
+python -c "from cryptography.fernet import Fernet; print('Cryptography: OK')"
+python -c "import keyring; print('Keyring: OK')"
+python -c "import requests; print('Requests: OK')"
+```
+
+### Troubleshooting Common Installation Issues
+
+#### Error: "Cannot import 'setuptools.build_meta'"
+```bash
+# Solution 1: Clean reinstall
+pip uninstall setuptools pip wheel
+python -m ensurepip --upgrade
+pip install --upgrade setuptools wheel
+
+# Solution 2: Force reinstall
+pip install --force-reinstall --no-cache-dir setuptools wheel pip
+
+# Solution 3: Use system package manager (Linux)
+sudo apt-get install --reinstall python3-setuptools python3-pip
+```
+
+#### Error: "Microsoft Visual C++ 14.0 is required" (Windows)
+```bash
+# Download and install from:
+# https://visualstudio.microsoft.com/visual-cpp-build-tools/
+
+# Alternative: Use conda
+conda install cryptography keyring requests
+```
+
+#### Error: "Failed building wheel for cryptography"
+```bash
+# Use pre-compiled wheel
+pip install --only-binary=all cryptography
+
+# Or set environment variables (macOS)
+export LDFLAGS="-L$(brew --prefix openssl)/lib"
+export CPPFLAGS="-I$(brew --prefix openssl)/include"
+pip install cryptography
+```
+
+#### Error: "No module named '_ctypes'" (Linux)
+```bash
+# Install libffi development headers
+sudo apt-get install libffi-dev  # Ubuntu/Debian
+sudo yum install libffi-devel    # CentOS/RHEL
+```
+
+### Docker Environment (Alternative)
+```dockerfile
+# Dockerfile for consistent environment
+FROM python:3.12-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libffi-dev \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip and install build tools
+RUN pip install --upgrade pip setuptools wheel build
+
+# Copy and install requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+WORKDIR /app
+COPY . .
+```
+
+### Environment Validation Script
+```python
+# validate_environment.py - Add to project
+import sys
+import importlib
+
+REQUIRED_MODULES = [
+    ('cryptography', '41.0.0'),
+    ('keyring', '24.0.0'),
+    ('requests', '2.31.0'),
+    ('pydantic', '2.0.0'),
+    ('psutil', '5.9.0'),
+    ('regex', '2023.0.0'),
+    ('pandas', '2.0.0'),
+    ('jsonschema', '4.0.0')
+]
+
+def validate_environment():
+    """Validate all required modules are properly installed"""
+    print(f"Python version: {sys.version}")
+    print(f"Python executable: {sys.executable}")
+    print("-" * 50)
+    
+    failed = []
+    for module_name, min_version in REQUIRED_MODULES:
+        try:
+            module = importlib.import_module(module_name)
+            version = getattr(module, '__version__', 'unknown')
+            print(f"✓ {module_name}: {version}")
+        except ImportError as e:
+            print(f"✗ {module_name}: FAILED - {e}")
+            failed.append(module_name)
+    
+    if failed:
+        print(f"\nFAILED MODULES: {failed}")
+        print("Run: pip install --upgrade " + " ".join(failed))
+        return False
+    
+    print("\n✓ All security libraries successfully installed!")
+    return True
+
+if __name__ == "__main__":
+    validate_environment()
 ```
 
 ## Security Contact Information
