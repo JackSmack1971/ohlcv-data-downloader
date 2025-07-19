@@ -16,6 +16,8 @@ urllib3==2.0.7
 # Security and encryption
 cryptography==41.0.8
 python-dotenv==1.0.0
+keyring==25.6.0
+keyrings.alt==5.0.2
 
 # JSON schema validation
 jsonschema==4.20.0
