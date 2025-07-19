@@ -11,7 +11,7 @@ import json
 import logging
 import hashlib
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Callable, Awaitable, TypeVar
 from datetime import datetime, date
 from dataclasses import dataclass
 import pandas as pd
@@ -28,6 +28,8 @@ from keyrings.alt.file import PlaintextKeyring
 from dotenv import load_dotenv
 import tempfile
 import shutil
+import asyncio
+import time
 
 if os.name == "posix":
     import fcntl
@@ -81,6 +83,66 @@ class FingerprintAdapter(HTTPAdapter):
         digest = hashlib.sha256(der_cert).hexdigest()
         if digest != self.fingerprint:
             raise SecurityError("Certificate fingerprint mismatch")
+
+
+class RateLimiter:
+    """Simple async token bucket rate limiter."""
+
+    def __init__(self, rate: int, per: float) -> None:
+        self._rate = rate
+        self._per = per
+        self._allowance = rate
+        self._last_check = time.monotonic()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        async with self._lock:
+            now = time.monotonic()
+            elapsed = now - self._last_check
+            self._last_check = now
+            self._allowance += elapsed * (self._rate / self._per)
+            if self._allowance > self._rate:
+                self._allowance = self._rate
+            if self._allowance < 1:
+                wait = (1 - self._allowance) * (self._per / self._rate)
+                await asyncio.sleep(wait)
+                self._allowance = 0
+            else:
+                self._allowance -= 1
+
+
+T = TypeVar("T")
+
+
+class CircuitBreaker:
+    """Async circuit breaker for external calls."""
+
+    def __init__(self, max_failures: int, reset_timeout: float) -> None:
+        self._max_failures = max_failures
+        self._reset_timeout = reset_timeout
+        self._failures = 0
+        self._state = "closed"
+        self._opened = 0.0
+
+    async def call(self, func: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any) -> T:
+        if self._state == "open":
+            if time.monotonic() - self._opened >= self._reset_timeout:
+                self._state = "half"
+            else:
+                raise SecurityError("Circuit breaker open")
+        try:
+            result = await func(*args, **kwargs)
+        except Exception:
+            self._failures += 1
+            if self._failures >= self._max_failures:
+                self._state = "open"
+                self._opened = time.monotonic()
+            raise
+        else:
+            if self._state == "half":
+                self._state = "closed"
+            self._failures = 0
+            return result
 
 
 class SecureOHLCVDownloader:
@@ -163,6 +225,8 @@ class SecureOHLCVDownloader:
             output_dir: Base directory for output files
         """
         self.output_dir = Path(output_dir).resolve()
+        self.rate_limiter = RateLimiter(int(os.getenv("API_RATE", "5")), 60.0)
+        self.circuit_breaker = CircuitBreaker(3, 60.0)
         self._setup_logging()
         self._setup_encryption()
         self._validate_output_directory()
@@ -553,8 +617,9 @@ class SecureOHLCVDownloader:
             Downloaded data as DataFrame
         """
         try:
-            stock = yf.Ticker(ticker)
-            data = stock.history(start=start_date, end=end_date, interval=interval)
+            data = asyncio.run(
+                self._yahoo_history(ticker, start_date, end_date, interval)
+            )
 
             if data.empty:
                 raise ValidationError("No data returned from Yahoo Finance")
@@ -581,6 +646,30 @@ class SecureOHLCVDownloader:
         session.mount(host, adapter)
         session.verify = True
         return session
+
+    async def _fetch_with_limit(
+        self, session: requests.Session, url: str, **kwargs: Any
+    ) -> requests.Response:
+        async def _request() -> requests.Response:
+            return await asyncio.to_thread(session.get, url, **kwargs)
+
+        await self.rate_limiter.acquire()
+        return await self.circuit_breaker.call(_request)
+
+    async def _yahoo_history(
+        self, ticker: str, start_date: date, end_date: date, interval: str
+    ) -> pd.DataFrame:
+        async def _call() -> pd.DataFrame:
+            stock = yf.Ticker(ticker)
+            return await asyncio.to_thread(
+                stock.history,
+                start=start_date,
+                end=end_date,
+                interval=interval,
+            )
+
+        await self.rate_limiter.acquire()
+        return await self.circuit_breaker.call(_call)
 
     def _download_alpha_vantage_secure(self, ticker: str) -> pd.DataFrame:
         """
@@ -611,7 +700,9 @@ class SecureOHLCVDownloader:
             session = self._create_pinned_session(
                 "https://www.alphavantage.co", self.ALPHA_VANTAGE_FINGERPRINT
             )
-            response = session.get(url, params=params, timeout=30)
+            response = asyncio.run(
+                self._fetch_with_limit(session, url, params=params, timeout=30)
+            )
             response.raise_for_status()
 
             # Validate response size (prevent memory exhaustion)
