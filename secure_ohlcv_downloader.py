@@ -17,6 +17,8 @@ from dataclasses import dataclass
 import pandas as pd
 import yfinance as yf
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from jsonschema import validate
 from cryptography.fernet import Fernet, InvalidToken
 from io import BytesIO
@@ -66,6 +68,21 @@ class ValidationError(Exception):
     pass
 
 
+class FingerprintAdapter(HTTPAdapter):
+    """HTTPAdapter that validates server certificate fingerprint."""
+
+    def __init__(self, fingerprint: str, *args: Any, **kwargs: Any) -> None:
+        self.fingerprint = fingerprint.lower().replace(":", "")
+        super().__init__(*args, **kwargs)
+
+    def cert_verify(self, conn, url, verify, cert) -> None:  # type: ignore[override]
+        super().cert_verify(conn, url, verify, cert)
+        der_cert = conn.sock.getpeercert(True)
+        digest = hashlib.sha256(der_cert).hexdigest()
+        if digest != self.fingerprint:
+            raise SecurityError("Certificate fingerprint mismatch")
+
+
 class SecureOHLCVDownloader:
     """
     Secure OHLCV data downloader with comprehensive input validation,
@@ -98,6 +115,12 @@ class SecureOHLCVDownloader:
 
     # Valid data sources
     VALID_SOURCES = {"yahoo", "alpha_vantage"}
+
+    # SHA256 fingerprint for Alpha Vantage SSL certificate (example value)
+    ALPHA_VANTAGE_FINGERPRINT = os.getenv(
+        "ALPHA_VANTAGE_FINGERPRINT",
+        "626ab34fbac6f21bd70928a741b93d7c5edda6af032dca527d17bffb8d34e523",
+    )
 
     # JSON schema for Alpha Vantage API response validation
     ALPHA_VANTAGE_SCHEMA = {
@@ -548,9 +571,21 @@ class SecureOHLCVDownloader:
                 f"Yahoo Finance download failed: {self._sanitize_error(str(e))}"
             )
 
+    def _create_pinned_session(self, host: str, fingerprint: str) -> requests.Session:
+        """Create a requests session with certificate pinning and retries."""
+        session = requests.Session()
+        retries = Retry(
+            total=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504]
+        )
+        adapter = FingerprintAdapter(fingerprint, max_retries=retries)
+        session.mount(host, adapter)
+        session.verify = True
+        return session
+
     def _download_alpha_vantage_secure(self, ticker: str) -> pd.DataFrame:
         """
-        Securely download data from Alpha Vantage with JSON validation
+        Securely download data from Alpha Vantage with JSON validation and
+        certificate pinning
 
         Args:
             ticker: Validated ticker symbol
@@ -573,7 +608,10 @@ class SecureOHLCVDownloader:
         }
 
         try:
-            response = requests.get(url, params=params, timeout=30)
+            session = self._create_pinned_session(
+                "https://www.alphavantage.co", self.ALPHA_VANTAGE_FINGERPRINT
+            )
+            response = session.get(url, params=params, timeout=30)
             response.raise_for_status()
 
             # Validate response size (prevent memory exhaustion)
@@ -618,6 +656,10 @@ class SecureOHLCVDownloader:
 
         except requests.RequestException as e:
             raise ValidationError(f"Network error: {self._sanitize_error(str(e))}")
+        except SecurityError as e:
+            raise ValidationError(
+                f"SSL validation failed: {self._sanitize_error(str(e))}"
+            )
         except (ValueError, KeyError) as e:
             raise ValidationError(f"Data parsing error: {self._sanitize_error(str(e))}")
 
