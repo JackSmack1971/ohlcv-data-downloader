@@ -6,6 +6,7 @@ Addresses critical security vulnerabilities from audit SEC-2025-001 through SEC-
 
 import os
 import re
+import regex
 import json
 import logging
 import hashlib
@@ -60,6 +61,9 @@ class SecureOHLCVDownloader:
 
     # Valid ticker symbol pattern (alphanumeric, dots, hyphens, underscores)
     TICKER_PATTERN = re.compile(r"^[A-Z0-9._-]{1,10}$")
+
+    # Pre-compiled date pattern with timeout to mitigate ReDoS
+    DATE_PATTERN = regex.compile(r"^\d{4}-\d{2}-\d{2}$", timeout=0.1)
 
     # Valid intervals
     VALID_INTERVALS = {
@@ -357,20 +361,32 @@ class SecureOHLCVDownloader:
 
         return resolved_path
 
+    def _validate_date_key(self, key: str) -> None:
+        """Validate date keys to mitigate ReDoS attacks."""
+        if len(key) > 10:
+            raise ValidationError("Date key length exceeds limit")
+        if not self.DATE_PATTERN.fullmatch(key):
+            raise ValidationError("Invalid date key format")
+
     def _validate_json_response(
         self, response_data: Dict[Any, Any], schema: Dict[Any, Any]
     ) -> None:
-        """
-        Validate JSON response against schema
+        """Validate JSON response with ReDoS protections.
 
         Args:
             response_data: JSON response data
             schema: JSON schema for validation
 
         Raises:
-            ValidationError: If response doesn't match schema
+            ValidationError: If validation fails
         """
         try:
+            time_series = response_data.get("Time Series (Daily)", {})
+            if len(time_series) > 10000:
+                raise ValidationError("Time series too large")
+            for key in time_series.keys():
+                self._validate_date_key(str(key))
+
             validate(instance=response_data, schema=schema)
         except Exception as e:
             raise ValidationError(
