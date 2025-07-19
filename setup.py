@@ -13,7 +13,7 @@ long_description = (this_directory / "README.md").read_text(encoding='utf-8')
 # Read requirements
 requirements = []
 try:
-    with open('requirements.txt', 'r') as f:
+    with open('requirements-secure.txt', 'r') as f:
         requirements = [line.strip() for line in f if line.strip() and not line.startswith('#')]
 except FileNotFoundError:
     requirements = [
@@ -34,7 +34,7 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/your-username/ohlcv-downloader",
     packages=find_packages(),
-    py_modules=['ohlcv_downloader', 'ohlcv_cli'],
+    py_modules=['secure_ohlcv_downloader', 'secure_ohlcv_cli'],
     classifiers=[
         "Development Status :: 5 - Production/Stable",
         "Intended Audience :: Financial and Insurance Industry",

@@ -1,4 +1,0 @@
-2025-07-19 14:49:34,779 - INFO - Starting download for AAPL
-2025-07-19 14:49:34,780 - INFO - Connecting to Yahoo Finance...
-2025-07-19 14:49:35,269 - INFO - Yahoo Finance: 6 records saved to data/AAPL/2024-01-01_to_2024-01-10/AAPL_yahoo_finance.csv
-2025-07-19 14:49:35,269 - INFO - Download completed! 1 source(s) successful. Data saved to: data/AAPL/2024-01-01_to_2024-01-10
