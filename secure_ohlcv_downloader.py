@@ -10,22 +10,28 @@ import json
 import logging
 import hashlib
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Union
+from typing import Optional, Dict, Any
 from datetime import datetime, date
 from dataclasses import dataclass
 import pandas as pd
 import yfinance as yf
 import requests
-from jsonschema import validate, ValidationError as JSONValidationError
-from cryptography.fernet import Fernet
+from jsonschema import validate
+from cryptography.fernet import Fernet, InvalidToken
+from io import BytesIO
+from keyring import errors as keyring_errors
+import keyring
+from keyrings.alt.file import PlaintextKeyring
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
+
 @dataclass
 class DownloadConfig:
     """Configuration class for OHLCV downloads"""
+
     ticker: str
     start_date: date
     end_date: date
@@ -33,13 +39,18 @@ class DownloadConfig:
     source: str
     encrypt_data: bool = False
 
+
 class SecurityError(Exception):
     """Custom exception for security-related errors"""
+
     pass
+
 
 class ValidationError(Exception):
     """Custom exception for validation errors"""
+
     pass
+
 
 class SecureOHLCVDownloader:
     """
@@ -48,13 +59,25 @@ class SecureOHLCVDownloader:
     """
 
     # Valid ticker symbol pattern (alphanumeric, dots, hyphens, underscores)
-    TICKER_PATTERN = re.compile(r'^[A-Z0-9._-]{1,10}$')
+    TICKER_PATTERN = re.compile(r"^[A-Z0-9._-]{1,10}$")
 
     # Valid intervals
-    VALID_INTERVALS = {'1d', '1wk', '1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'ytd', 'max'}
+    VALID_INTERVALS = {
+        "1d",
+        "1wk",
+        "1mo",
+        "3mo",
+        "6mo",
+        "1y",
+        "2y",
+        "5y",
+        "10y",
+        "ytd",
+        "max",
+    }
 
     # Valid data sources
-    VALID_SOURCES = {'yahoo', 'alpha_vantage'}
+    VALID_SOURCES = {"yahoo", "alpha_vantage"}
 
     # JSON schema for Alpha Vantage API response validation
     ALPHA_VANTAGE_SCHEMA = {
@@ -70,19 +93,23 @@ class SecureOHLCVDownloader:
                             "2. high": {"type": "string"},
                             "3. low": {"type": "string"},
                             "4. close": {"type": "string"},
-                            "5. volume": {"type": "string"}
+                            "5. volume": {"type": "string"},
                         },
-                        "required": ["1. open", "2. high", "3. low", "4. close", "5. volume"]
+                        "required": [
+                            "1. open",
+                            "2. high",
+                            "3. low",
+                            "4. close",
+                            "5. volume",
+                        ],
                     }
-                }
+                },
             },
             "Meta Data": {
                 "type": "object",
-                "properties": {
-                    "2. Symbol": {"type": "string"}
-                }
-            }
-        }
+                "properties": {"2. Symbol": {"type": "string"}},
+            },
+        },
     }
 
     def __init__(self, output_dir: str = "/home/user/output"):
@@ -99,27 +126,39 @@ class SecureOHLCVDownloader:
 
     def _setup_logging(self) -> None:
         """Setup secure logging with sanitized messages"""
-        log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         logging.basicConfig(
             level=logging.INFO,
             format=log_format,
             handlers=[
-                logging.FileHandler(self.output_dir / 'secure_downloader.log'),
-                logging.StreamHandler()
-            ]
+                logging.FileHandler(self.output_dir / "secure_downloader.log"),
+                logging.StreamHandler(),
+            ],
         )
         self.logger = logging.getLogger(__name__)
 
     def _setup_encryption(self) -> None:
-        """Setup encryption for sensitive data storage"""
-        encryption_key = os.getenv('OHLCV_ENCRYPTION_KEY')
-        if encryption_key:
-            self.cipher = Fernet(encryption_key.encode())
-        else:
-            # Generate a new key if none exists
-            key = Fernet.generate_key()
-            self.cipher = Fernet(key)
-            self.logger.warning("No encryption key found. Generated new key. Store securely!")
+        """Setup encryption for sensitive data storage with key persistence."""
+        try:
+            backend = keyring.get_keyring()
+            if isinstance(backend, keyring.backends.fail.Keyring):
+                keyring.set_keyring(PlaintextKeyring())
+
+            key = os.getenv("OHLCV_ENCRYPTION_KEY")
+            if not key:
+                key = keyring.get_password("ohlcv_downloader", "encryption_key")
+            if not key:
+                key = Fernet.generate_key().decode()
+                keyring.set_password(
+                    "ohlcv_downloader",
+                    "encryption_key",
+                    key,
+                )
+                self.logger.warning("Generated new encryption key and stored securely")
+
+            self.cipher = Fernet(key.encode())
+        except keyring_errors.KeyringError as e:
+            raise SecurityError(f"Keyring failure: {self._sanitize_error(str(e))}")
 
     def _validate_output_directory(self) -> None:
         """Validate and create output directory with proper permissions"""
@@ -128,7 +167,46 @@ class SecureOHLCVDownloader:
             # Set restrictive permissions (owner read/write/execute only)
             os.chmod(self.output_dir, 0o700)
         except Exception as e:
-            raise SecurityError(f"Failed to create secure output directory: {self._sanitize_error(str(e))}")
+            sanitized = self._sanitize_error(str(e))
+            raise SecurityError(
+                f"Failed to create secure output directory: {sanitized}"
+            )
+
+    def rotate_encryption_key(self) -> None:
+        """Rotate encryption key while keeping old key for backward compatibility."""
+        try:
+            old_key = keyring.get_password("ohlcv_downloader", "encryption_key")
+            if not old_key:
+                raise SecurityError("No existing encryption key to rotate")
+
+            keyring.set_password("ohlcv_downloader", "encryption_key_prev", old_key)
+            new_key = Fernet.generate_key().decode()
+            keyring.set_password("ohlcv_downloader", "encryption_key", new_key)
+            self.cipher = Fernet(new_key.encode())
+            self.logger.info("Encryption key rotated successfully")
+        except (keyring_errors.KeyringError, SecurityError) as e:
+            raise SecurityError(f"Key rotation failed: {self._sanitize_error(str(e))}")
+
+    def decrypt_file(self, file_path: Path) -> pd.DataFrame:
+        """Decrypt an encrypted CSV file using current or previous key."""
+        try:
+            with open(file_path, "rb") as f:
+                encrypted_data = f.read()
+
+            try:
+                decrypted = self.cipher.decrypt(encrypted_data)
+            except InvalidToken:
+                prev_key = keyring.get_password(
+                    "ohlcv_downloader", "encryption_key_prev"
+                )
+                if not prev_key:
+                    raise
+                prev_cipher = Fernet(prev_key.encode())
+                decrypted = prev_cipher.decrypt(encrypted_data)
+
+            return pd.read_csv(BytesIO(decrypted), index_col=0)
+        except (OSError, InvalidToken, keyring_errors.KeyringError) as e:
+            raise SecurityError(f"Decryption failed: {self._sanitize_error(str(e))}")
 
     def _sanitize_error(self, error_message: str) -> str:
         """
@@ -141,10 +219,19 @@ class SecureOHLCVDownloader:
             Sanitized error message
         """
         # Remove file paths, API keys, and other sensitive information
-        sanitized = re.sub(r'/[^\s]*', '[PATH_REDACTED]', error_message)
-        sanitized = re.sub(r'key[=:]\s*[^\s]+', 'key=[REDACTED]', sanitized, flags=re.IGNORECASE)
-        sanitized = re.sub(r'token[=:]\s*[^\s]+', 'token=[REDACTED]', sanitized, flags=re.IGNORECASE)
-        sanitized = re.sub(r'password[=:]\s*[^\s]+', 'password=[REDACTED]', sanitized, flags=re.IGNORECASE)
+        sanitized = re.sub(r"/[^\s]*", "[PATH_REDACTED]", error_message)
+        sanitized = re.sub(
+            r"key[=:]\s*[^\s]+", "key=[REDACTED]", sanitized, flags=re.IGNORECASE
+        )
+        sanitized = re.sub(
+            r"token[=:]\s*[^\s]+", "token=[REDACTED]", sanitized, flags=re.IGNORECASE
+        )
+        sanitized = re.sub(
+            r"password[=:]\s*[^\s]+",
+            "password=[REDACTED]",
+            sanitized,
+            flags=re.IGNORECASE,
+        )
 
         return sanitized
 
@@ -169,10 +256,12 @@ class SecureOHLCVDownloader:
 
         # Validate against pattern
         if not self.TICKER_PATTERN.match(ticker):
-            raise ValidationError("Invalid ticker symbol format. Use only alphanumeric characters, dots, hyphens, and underscores")
+            raise ValidationError(
+                "Invalid ticker symbol format. Use only alphanumeric characters, dots, hyphens, and underscores"
+            )
 
         # Additional security check for path traversal attempts
-        if '..' in ticker or '/' in ticker or '\\' in ticker:
+        if ".." in ticker or "/" in ticker or "\\" in ticker:
             raise SecurityError("Potential path traversal attempt detected")
 
         return ticker
@@ -197,7 +286,9 @@ class SecureOHLCVDownloader:
         # Reasonable date range limits (prevent excessive API calls)
         max_days = 3650  # 10 years
         if (end_date - start_date).days > max_days:
-            raise ValidationError(f"Date range too large. Maximum {max_days} days allowed")
+            raise ValidationError(
+                f"Date range too large. Maximum {max_days} days allowed"
+            )
 
     def _validate_interval(self, interval: str) -> str:
         """
@@ -213,7 +304,9 @@ class SecureOHLCVDownloader:
             ValidationError: If interval is invalid
         """
         if interval not in self.VALID_INTERVALS:
-            raise ValidationError(f"Invalid interval. Must be one of: {', '.join(self.VALID_INTERVALS)}")
+            raise ValidationError(
+                f"Invalid interval. Must be one of: {', '.join(self.VALID_INTERVALS)}"
+            )
         return interval
 
     def _validate_source(self, source: str) -> str:
@@ -230,7 +323,9 @@ class SecureOHLCVDownloader:
             ValidationError: If source is invalid
         """
         if source not in self.VALID_SOURCES:
-            raise ValidationError(f"Invalid source. Must be one of: {', '.join(self.VALID_SOURCES)}")
+            raise ValidationError(
+                f"Invalid source. Must be one of: {', '.join(self.VALID_SOURCES)}"
+            )
         return source
 
     def _create_secure_path(self, ticker: str, date_range: str) -> Path:
@@ -262,7 +357,9 @@ class SecureOHLCVDownloader:
 
         return resolved_path
 
-    def _validate_json_response(self, response_data: Dict[Any, Any], schema: Dict[Any, Any]) -> None:
+    def _validate_json_response(
+        self, response_data: Dict[Any, Any], schema: Dict[Any, Any]
+    ) -> None:
         """
         Validate JSON response against schema
 
@@ -276,7 +373,9 @@ class SecureOHLCVDownloader:
         try:
             validate(instance=response_data, schema=schema)
         except Exception as e:
-            raise ValidationError(f"API response validation failed: {self._sanitize_error(str(e))}")
+            raise ValidationError(
+                f"API response validation failed: {self._sanitize_error(str(e))}"
+            )
 
     def _get_api_key(self, service: str) -> Optional[str]:
         """
@@ -294,7 +393,9 @@ class SecureOHLCVDownloader:
         if api_key:
             self.logger.info(f"API key found for {service}")
         else:
-            self.logger.warning(f"No API key found for {service} in environment variable {key_name}")
+            self.logger.warning(
+                f"No API key found for {service} in environment variable {key_name}"
+            )
 
         return api_key
 
@@ -324,12 +425,16 @@ class SecureOHLCVDownloader:
             output_path = self._create_secure_path(ticker, date_range)
 
             # Log download attempt (with sanitized info)
-            self.logger.info(f"Starting secure download: ticker={ticker}, source={source}, interval={interval}")
+            self.logger.info(
+                f"Starting secure download: ticker={ticker}, source={source}, interval={interval}"
+            )
 
             # Download data based on source
-            if source == 'yahoo':
-                data = self._download_yahoo_secure(ticker, config.start_date, config.end_date, interval)
-            elif source == 'alpha_vantage':
+            if source == "yahoo":
+                data = self._download_yahoo_secure(
+                    ticker, config.start_date, config.end_date, interval
+                )
+            elif source == "alpha_vantage":
                 data = self._download_alpha_vantage_secure(ticker)
             else:
                 raise ValidationError(f"Unsupported source: {source}")
@@ -357,7 +462,9 @@ class SecureOHLCVDownloader:
             self.logger.error(f"Download failed: {error_msg}")
             raise
 
-    def _download_yahoo_secure(self, ticker: str, start_date: date, end_date: date, interval: str) -> pd.DataFrame:
+    def _download_yahoo_secure(
+        self, ticker: str, start_date: date, end_date: date, interval: str
+    ) -> pd.DataFrame:
         """
         Securely download data from Yahoo Finance
 
@@ -378,14 +485,16 @@ class SecureOHLCVDownloader:
                 raise ValidationError("No data returned from Yahoo Finance")
 
             # Validate data structure
-            expected_columns = {'Open', 'High', 'Low', 'Close', 'Volume'}
+            expected_columns = {"Open", "High", "Low", "Close", "Volume"}
             if not expected_columns.issubset(data.columns):
                 raise ValidationError("Invalid data structure from Yahoo Finance")
 
             return data
 
         except Exception as e:
-            raise ValidationError(f"Yahoo Finance download failed: {self._sanitize_error(str(e))}")
+            raise ValidationError(
+                f"Yahoo Finance download failed: {self._sanitize_error(str(e))}"
+            )
 
     def _download_alpha_vantage_secure(self, ticker: str) -> pd.DataFrame:
         """
@@ -397,16 +506,18 @@ class SecureOHLCVDownloader:
         Returns:
             Downloaded data as DataFrame
         """
-        api_key = self._get_api_key('alpha_vantage')
+        api_key = self._get_api_key("alpha_vantage")
         if not api_key:
-            raise ValidationError("Alpha Vantage API key not found in environment variables")
+            raise ValidationError(
+                "Alpha Vantage API key not found in environment variables"
+            )
 
         url = "https://www.alphavantage.co/query"
         params = {
-            'function': 'TIME_SERIES_DAILY',
-            'symbol': ticker,
-            'apikey': api_key,
-            'outputsize': 'compact'
+            "function": "TIME_SERIES_DAILY",
+            "symbol": ticker,
+            "apikey": api_key,
+            "outputsize": "compact",
         }
 
         try:
@@ -423,30 +534,32 @@ class SecureOHLCVDownloader:
             self._validate_json_response(data, self.ALPHA_VANTAGE_SCHEMA)
 
             # Check for API errors
-            if 'Error Message' in data:
+            if "Error Message" in data:
                 raise ValidationError("Invalid ticker symbol or API limit reached")
 
-            if 'Note' in data:
+            if "Note" in data:
                 raise ValidationError("API call frequency limit reached")
 
             # Convert to DataFrame
-            time_series = data.get('Time Series (Daily)', {})
+            time_series = data.get("Time Series (Daily)", {})
             if not time_series:
                 raise ValidationError("No time series data in response")
 
             df_data = []
             for date_str, values in time_series.items():
-                df_data.append({
-                    'Date': pd.to_datetime(date_str),
-                    'Open': float(values['1. open']),
-                    'High': float(values['2. high']),
-                    'Low': float(values['3. low']),
-                    'Close': float(values['4. close']),
-                    'Volume': int(values['5. volume'])
-                })
+                df_data.append(
+                    {
+                        "Date": pd.to_datetime(date_str),
+                        "Open": float(values["1. open"]),
+                        "High": float(values["2. high"]),
+                        "Low": float(values["3. low"]),
+                        "Close": float(values["4. close"]),
+                        "Volume": int(values["5. volume"]),
+                    }
+                )
 
             df = pd.DataFrame(df_data)
-            df.set_index('Date', inplace=True)
+            df.set_index("Date", inplace=True)
             df.sort_index(inplace=True)
 
             return df
@@ -471,12 +584,14 @@ class SecureOHLCVDownloader:
         encrypted_data = self.cipher.encrypt(csv_data.encode())
 
         # Save encrypted data
-        with open(f"{file_path}.encrypted", 'wb') as f:
+        with open(f"{file_path}.encrypted", "wb") as f:
             f.write(encrypted_data)
 
         self.logger.info("Data saved with encryption")
 
-    def _create_metadata(self, config: DownloadConfig, output_path: Path, record_count: int) -> None:
+    def _create_metadata(
+        self, config: DownloadConfig, output_path: Path, record_count: int
+    ) -> None:
         """
         Create metadata file with download information
 
@@ -486,19 +601,19 @@ class SecureOHLCVDownloader:
             record_count: Number of records downloaded
         """
         metadata = {
-            'ticker': config.ticker,
-            'source': config.source,
-            'interval': config.interval,
-            'start_date': config.start_date.isoformat(),
-            'end_date': config.end_date.isoformat(),
-            'download_timestamp': datetime.now().isoformat(),
-            'record_count': record_count,
-            'encrypted': config.encrypt_data,
-            'checksum': self._calculate_checksum(output_path)
+            "ticker": config.ticker,
+            "source": config.source,
+            "interval": config.interval,
+            "start_date": config.start_date.isoformat(),
+            "end_date": config.end_date.isoformat(),
+            "download_timestamp": datetime.now().isoformat(),
+            "record_count": record_count,
+            "encrypted": config.encrypt_data,
+            "checksum": self._calculate_checksum(output_path),
         }
 
         metadata_path = output_path / f"{config.ticker}_{config.source}_metadata.json"
-        with open(metadata_path, 'w') as f:
+        with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2)
 
         # Set secure permissions
