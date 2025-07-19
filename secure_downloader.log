@@ -1,0 +1,5 @@
+2025-07-19 15:24:05,024 - secure_ohlcv_downloader - WARNING - No encryption key found. Generated new key. Store securely!
+2025-07-19 15:24:05,025 - secure_ohlcv_downloader - INFO - API key found for alpha_vantage
+2025-07-19 15:24:05,027 - secure_ohlcv_downloader - WARNING - No API key found for alpha_vantage in environment variable ALPHA_VANTAGE_API_KEY
+2025-07-19 15:24:05,030 - secure_ohlcv_downloader - INFO - Starting secure download: ticker=AAPL, source=yahoo, interval=1d
+2025-07-19 15:24:05,602 - secure_ohlcv_downloader - ERROR - Download failed: [Errno 21] Is a directory: '[PATH_REDACTED]
