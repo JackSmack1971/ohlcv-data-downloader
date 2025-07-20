@@ -1,7 +1,5 @@
 {
-  "alpha_vantage_fingerprints": [
-    "626ab34fbac6f21bd70928a741b93d7c5edda6af032dca527d17bffb8d34e523"
-  ],
-  "last_updated": "2025-07-20T15:20:00.976544Z",
+  "alpha_vantage_fingerprints": [],
+  "last_updated": null,
   "rotation_window_hours": 72
 }
