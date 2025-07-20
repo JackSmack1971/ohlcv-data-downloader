@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 Secure OHLCV Data Downloader - Command Line Interface
 Addresses critical security vulnerabilities from audit SEC-2025-001 through SEC-2025-006
@@ -18,6 +19,8 @@ import keyring
 from keyring import errors as keyring_errors
 from dotenv import load_dotenv
 from config import GlobalConfig, load_global_config
+import ctypes
+import gc
 
 # Load environment variables
 load_dotenv()
@@ -27,6 +30,91 @@ MIN_SOURCE_DATES = {
     "yahoo": date(1962, 1, 1),
     "alpha_vantage": date(1999, 1, 1),
 }
+
+# =====================================================================
+# SEC-2025-016: Memory-based Credential Protection
+# =====================================================================
+class SecureCredentialManager:
+    """Manage secure allocation and clearing of sensitive strings."""
+
+    def __init__(self) -> None:
+        self.secure_allocations: list[int] = []
+        self._setup_secure_memory()
+
+    def _setup_secure_memory(self) -> None:
+        try:
+            if hasattr(os, "mlockall"):
+                os.mlockall(os.MCL_CURRENT | os.MCL_FUTURE)
+        except (OSError, AttributeError):
+            pass
+
+    def create_secure_string(self, initial_value: str = "") -> "SecureString":
+        return SecureString(initial_value, memory_manager=self)
+
+    def secure_input(self, prompt: str) -> "SecureString":
+        try:
+            sensitive_data = getpass.getpass(prompt)
+            return self.create_secure_string(sensitive_data)
+        finally:
+            if "sensitive_data" in locals():
+                self._secure_clear_variable("sensitive_data", locals())
+
+    def _secure_clear_variable(self, var_name: str, namespace: dict) -> None:
+        if var_name in namespace:
+            var_value = namespace[var_name]
+            self._overwrite_string_memory(var_value)
+            namespace[var_name] = None
+            del namespace[var_name]
+            gc.collect()
+
+    def _overwrite_string_memory(self, value) -> None:
+        try:
+            if isinstance(value, bytearray):
+                for i in range(len(value)):
+                    value[i] = 0
+            elif isinstance(value, str):
+                buf = bytearray(value, "utf-8")
+                for i in range(len(buf)):
+                    buf[i] = 0
+        except Exception:
+            pass
+
+
+
+
+class SecureString:
+    """String wrapper using a mutable buffer for secure clearing."""
+
+    def __init__(self, initial_value: str = "", memory_manager: SecureCredentialManager | None = None) -> None:
+        self._buffer = bytearray(initial_value, "utf-8")
+        self._cleared = False
+        self.memory_manager = memory_manager or SecureCredentialManager()
+
+    def get_value(self) -> str:
+        if self._cleared:
+            raise ValueError("SecureString has been cleared")
+        return self._buffer.decode()
+
+    def clear(self) -> None:
+        if not self._cleared:
+            for i in range(len(self._buffer)):
+                self._buffer[i] = 0
+            self._buffer = bytearray()
+            self._cleared = True
+            gc.collect()
+
+    def __del__(self) -> None:
+        if not self._cleared:
+            self.clear()
+
+    def __str__(self) -> str:  # pragma: no cover - value should not be exposed
+        return "[SECURE_STRING]" if not self._cleared else "[CLEARED]"
+
+    def __len__(self) -> int:
+        return 0 if self._cleared else len(self._buffer)
+
+    def __bool__(self) -> bool:
+        return not self._cleared and bool(self._value)
 
 # Import the secure downloader
 from secure_ohlcv_downloader import (
@@ -47,6 +135,8 @@ class SecureCLI:
     def __init__(self):
         self.downloader = None
         self.config = load_global_config(os.getenv("OHLCV_CONFIG_FILE"))
+        self.credential_manager = SecureCredentialManager()
+        self.secure_credentials: dict[str, SecureString] = {}
 
     def create_parser(self) -> argparse.ArgumentParser:
         """
@@ -235,26 +325,31 @@ Examples:
                 "   Get your free API key at: https://www.alphavantage.co/support/#api-key"
             )
 
-            loop = asyncio.get_event_loop()
-            api_key = await loop.run_in_executor(
-                None, getpass.getpass, "Enter Alpha Vantage API key (input hidden): "
+        loop = asyncio.get_event_loop()
+        api_key_plain = await loop.run_in_executor(
+            None, getpass.getpass, "Enter Alpha Vantage API key (input hidden): "
+        )
+        api_key_plain = api_key_plain.strip()
+
+        if not api_key_plain:
+            print("❌ No API key provided")
+            sys.exit(1)
+
+        try:
+            secure_api_key = self.credential_manager.create_secure_string(
+                api_key_plain
             )
-            api_key = api_key.strip()
+            keyring.set_password(
+                "ohlcv_downloader", "alpha_vantage_api_key", secure_api_key.get_value()
+            )
+            print("✅ API key stored securely")
+        except keyring_errors.KeyringError as exc:
+            raise SecurityError(f"Failed to store API key: {exc}") from exc
 
-            if not api_key:
-                print("❌ No API key provided")
-                sys.exit(1)
-
-            try:
-                keyring.set_password(
-                    "ohlcv_downloader", "alpha_vantage_api_key", api_key
-                )
-                print("✅ API key stored securely")
-            except keyring_errors.KeyringError as exc:
-                raise SecurityError(f"Failed to store API key: {exc}") from exc
-
-            # Clear variable from memory
-            del api_key
+        # Clear variables from memory
+        secure_api_key.clear()
+        self.credential_manager._secure_clear_variable("secure_api_key", locals())
+        self.credential_manager._secure_clear_variable("api_key_plain", locals())
 
     def _check_environment(self) -> None:
         """
