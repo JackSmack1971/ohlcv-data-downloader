@@ -13,6 +13,7 @@ import hashlib
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable, Awaitable, TypeVar
 from datetime import datetime, date
+import getpass
 from dataclasses import dataclass
 import pandas as pd
 import yfinance as yf
@@ -27,6 +28,7 @@ import keyring
 from keyrings.alt.file import PlaintextKeyring
 from dotenv import load_dotenv
 from config import GlobalConfig, load_global_config
+from audit import AuditLogger, AuditError
 import tempfile
 import shutil
 import asyncio
@@ -238,8 +240,12 @@ class SecureOHLCVDownloader:
         self.rate_limiter = RateLimiter(int(os.getenv("API_RATE", "5")), 60.0)
         self.circuit_breaker = CircuitBreaker(3, 60.0)
         self._setup_logging()
-        self._setup_encryption()
         self._validate_output_directory()
+        self.audit = AuditLogger(
+            self.output_dir / "audit.log",
+            os.getenv("AUDIT_LOG_HMAC_KEY"),
+        )
+        self._setup_encryption()
 
     def _setup_logging(self) -> None:
         """Setup secure logging with sanitized messages"""
@@ -320,7 +326,9 @@ class SecureOHLCVDownloader:
                 prev_cipher = Fernet(prev_key.encode())
                 decrypted = prev_cipher.decrypt(encrypted_data)
 
-            return pd.read_csv(BytesIO(decrypted), index_col=0)
+            df = pd.read_csv(BytesIO(decrypted), index_col=0)
+            self._audit_event("decrypt", {"file": str(file_path)})
+            return df
         except (OSError, InvalidToken, keyring_errors.KeyringError) as e:
             raise SecurityError(f"Decryption failed: {self._sanitize_error(str(e))}")
 
@@ -350,6 +358,16 @@ class SecureOHLCVDownloader:
         )
 
         return sanitized
+
+    def _audit_event(self, action: str, details: Dict[str, Any]) -> None:
+        """Log audit event and handle failures silently."""
+        user = os.getenv("OHLCV_USER", getpass.getuser())
+        try:
+            self.audit.log(user, action, details)
+        except AuditError as exc:
+            self.logger.error(
+                f"Audit log failure: {self._sanitize_error(str(exc))}"
+            )
 
     def _validate_ticker(self, ticker: str) -> str:
         """
@@ -484,6 +502,10 @@ class SecureOHLCVDownloader:
                 raise SecurityError("Path traversal attempt detected after creation")
 
             os.chmod(target_dir, self.config.dir_permissions)
+            self._audit_event(
+                "path_created",
+                {"path": str(target_dir)},
+            )
         finally:
             if os.name == "posix":
                 fcntl.flock(lock_file, fcntl.LOCK_UN)
@@ -602,6 +624,16 @@ class SecureOHLCVDownloader:
 
             # Set secure file permissions
             os.chmod(file_path, self.config.file_permissions)
+
+            self._audit_event(
+                "download",
+                {
+                    "ticker": ticker,
+                    "source": source,
+                    "file": str(file_path),
+                    "records": len(data),
+                },
+            )
 
             # Create metadata
             self._create_metadata(config, output_path, len(data))
@@ -800,6 +832,7 @@ class SecureOHLCVDownloader:
             f.write(encrypted_data)
 
         self.logger.info("Data saved with encryption")
+        self._audit_event("save_encrypted", {"file": f"{file_path}.encrypted"})
 
     def _create_metadata(
         self, config: DownloadConfig, output_path: Path, record_count: int
@@ -830,6 +863,10 @@ class SecureOHLCVDownloader:
 
         # Set secure permissions
         os.chmod(metadata_path, self.config.file_permissions)
+        self._audit_event(
+            "metadata_created",
+            {"file": str(metadata_path), "records": record_count},
+        )
 
     def _calculate_checksum(self, file_path: Path) -> str:
         """
