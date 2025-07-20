@@ -1,10 +1,35 @@
 [build-system]
-requires = ["setuptools>=61", "wheel"]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
 build-backend = "setuptools.build_meta"
 
-[tool.mypy]
-python_version = "3.12"
+[project]
+name = "secure-ohlcv-downloader"
+version = "1.0.0"
+description = "Secure financial data downloader with comprehensive security controls"
+authors = [{name = "Security Team", email = "security@example.com"}]
+license = {text = "MIT"}
+dependencies = [
+    "aiofiles>=0.8.0",
+    "aiohttp>=3.8.0",
+    "cryptography>=3.4.8",
+    "regex>=2022.1.18",
+    "keyring>=23.0.0",
+    "psutil>=5.8.0",
+]
 
-[tool.flake8]
-max-line-length = 120
-extend-ignore = ["E203", "W503"]
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.20.0",
+    "bandit>=1.7.0",
+    "safety>=2.0.0",
+    "flake8>=5.0.0",
+    "mypy>=0.991",
+    "pandas>=1.4.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
