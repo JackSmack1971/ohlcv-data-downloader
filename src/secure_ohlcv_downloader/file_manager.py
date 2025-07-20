@@ -11,7 +11,8 @@ import aiofiles
 
 from config import GlobalConfig
 from .encryption import EncryptionManager
-from .exceptions import SecurityError
+from .exceptions import SecurityError, FileLockTimeoutError
+from .file_lock import CrossPlatformFileLockManager
 
 
 class FileManager:
@@ -20,6 +21,7 @@ class FileManager:
     def __init__(self, config: GlobalConfig, enc: EncryptionManager) -> None:
         self.config = config
         self.encryption = enc
+        self.lock_manager = CrossPlatformFileLockManager()
 
     def create_secure_path(self, ticker: str, date_range: str, output_dir: Path) -> Path:
         output_root = output_dir.resolve()
@@ -27,15 +29,20 @@ class FileManager:
         resolved = target_dir.resolve() if target_dir.exists() else target_dir
         if not str(resolved).startswith(str(output_root)):
             raise SecurityError("Path traversal attempt detected before creation")
+
         tmp_dir = Path(tempfile.mkdtemp(dir=str(output_root)))
+        lock_file = str(target_dir) + ".lock"
         try:
-            target_dir.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(tmp_dir, target_dir)
-            os.chmod(target_dir, self.config.dir_permissions)
-            final_resolved = target_dir.resolve()
-            if not str(final_resolved).startswith(str(output_root)):
-                raise SecurityError("Path traversal attempt detected after creation")
-            return target_dir
+            with self.lock_manager.secure_file_lock(lock_file, timeout=5.0):
+                target_dir.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(tmp_dir, target_dir)
+                os.chmod(target_dir, self.config.dir_permissions)
+                final_resolved = target_dir.resolve()
+                if not str(final_resolved).startswith(str(output_root)):
+                    raise SecurityError("Path traversal attempt detected after creation")
+                return target_dir
+        except FileLockTimeoutError as exc:
+            raise SecurityError(f"Unable to acquire lock for {target_dir}") from exc
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
