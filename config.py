@@ -18,6 +18,8 @@ class GlobalConfig:
     max_api_response_size: int
     max_date_range_days: int
     request_timeout: int
+    chunk_size_days: int
+    max_memory_mb: int
     dir_permissions: int
     file_permissions: int
 
@@ -42,6 +44,12 @@ def load_global_config(path: Optional[str] = None) -> GlobalConfig:
         ),
         request_timeout=int(
             data.get("request_timeout", env("REQUEST_TIMEOUT", "30"))
+        ),
+        chunk_size_days=int(
+            data.get("chunk_size_days", env("CHUNK_SIZE_DAYS", "365"))
+        ),
+        max_memory_mb=int(
+            data.get("max_memory_mb", env("MAX_MEMORY_MB", "512"))
         ),
         dir_permissions=_parse_oct(
             str(data.get("dir_permissions", env("DIR_PERMISSIONS", "0o700"))),
