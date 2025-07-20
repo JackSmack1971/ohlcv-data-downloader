@@ -42,7 +42,7 @@ class SecurityTestSuite:
         try:
             valid_ticker = self.downloader._validate_ticker("AAPL")
             self.log_test("Valid ticker validation", valid_ticker == "AAPL")
-        except Exception as e:
+        except (ValidationError, SecurityError) as e:
             self.log_test("Valid ticker validation", False, str(e))
 
         # Test 2: Path traversal attempt should fail
@@ -51,7 +51,7 @@ class SecurityTestSuite:
             self.log_test("Path traversal detection", False, "Should have raised SecurityError")
         except SecurityError:
             self.log_test("Path traversal detection", True, "Correctly blocked path traversal")
-        except Exception as e:
+        except ValidationError as e:
             self.log_test("Path traversal detection", False, f"Wrong exception: {e}")
 
         # Test 3: Invalid characters should fail
@@ -60,7 +60,7 @@ class SecurityTestSuite:
             self.log_test("Invalid character detection", False, "Should have raised SecurityError")
         except SecurityError:
             self.log_test("Invalid character detection", True, "Correctly blocked invalid characters")
-        except Exception as e:
+        except ValidationError as e:
             self.log_test("Invalid character detection", False, f"Wrong exception: {e}")
 
     def test_input_validation(self):
@@ -73,7 +73,7 @@ class SecurityTestSuite:
             end_date = date.today()
             self.downloader._validate_date_range(start_date, end_date)
             self.log_test("Valid date range", True)
-        except Exception as e:
+        except ValidationError as e:
             self.log_test("Valid date range", False, str(e))
 
         # Test 2: Invalid date range (start > end)
@@ -84,7 +84,7 @@ class SecurityTestSuite:
             self.log_test("Invalid date range detection", False, "Should have raised ValidationError")
         except ValidationError:
             self.log_test("Invalid date range detection", True, "Correctly detected invalid range")
-        except Exception as e:
+        except SecurityError as e:
             self.log_test("Invalid date range detection", False, f"Wrong exception: {e}")
 
         # Test 3: Future date should fail
@@ -95,7 +95,7 @@ class SecurityTestSuite:
             self.log_test("Future date detection", False, "Should have raised ValidationError")
         except ValidationError:
             self.log_test("Future date detection", True, "Correctly blocked future dates")
-        except Exception as e:
+        except SecurityError as e:
             self.log_test("Future date detection", False, f"Wrong exception: {e}")
 
     def test_api_key_security(self):
@@ -111,7 +111,7 @@ class SecurityTestSuite:
         try:
             api_key = self.downloader._get_api_key('alpha_vantage')
             self.log_test("API key retrieval", api_key == 'test_key_12345')
-        except Exception as e:
+        except (CredentialError, ValidationError, SecurityError) as e:
             self.log_test("API key retrieval", False, str(e))
 
         # Test 2: Missing API key handling
@@ -121,7 +121,7 @@ class SecurityTestSuite:
         try:
             api_key = self.downloader._get_api_key('alpha_vantage')
             self.log_test("Missing API key handling", api_key is None)
-        except Exception as e:
+        except (CredentialError, ValidationError, SecurityError) as e:
             self.log_test("Missing API key handling", False, str(e))
 
         # Restore original key if it existed
@@ -158,7 +158,7 @@ class SecurityTestSuite:
             permissions = oct(secure_path.stat().st_mode)[-3:]
             self.log_test("Directory permissions", permissions == "700", f"Permissions: {permissions}")
 
-        except Exception as e:
+        except (SecurityError, ValidationError) as e:
             self.log_test("Secure path creation", False, str(e))
 
     def test_data_download_security(self):
@@ -193,7 +193,7 @@ class SecurityTestSuite:
                 metadata_exists = metadata_file.exists()
                 self.log_test("Metadata creation", metadata_exists, f"Metadata: {metadata_file}")
 
-        except Exception as e:
+        except (ValidationError, SecurityError, CredentialError) as e:
             self.log_test("Data download", False, str(e))
 
     def run_all_tests(self):
