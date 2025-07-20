@@ -23,6 +23,7 @@ class GlobalConfig:
     dir_permissions: int
     file_permissions: int
     retention_days: int
+    cache_ttl: int
 
 
 def load_global_config(path: Optional[str] = None) -> GlobalConfig:
@@ -62,6 +63,9 @@ def load_global_config(path: Optional[str] = None) -> GlobalConfig:
         ),
         retention_days=int(
             data.get("retention_days", env("RETENTION_DAYS", "2555"))
+        ),
+        cache_ttl=int(
+            data.get("cache_ttl", env("CACHE_TTL", "3600"))
         ),
     )
 

@@ -12,7 +12,7 @@ import json
 import logging
 import hashlib
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable, Awaitable, TypeVar
+from typing import Optional, Dict, Any, Callable, Awaitable, TypeVar, Tuple
 from datetime import datetime, date, timedelta
 import getpass
 from dataclasses import dataclass
@@ -160,6 +160,34 @@ class CircuitBreaker:
             return result
 
 
+class APICache:
+    """Simple in-memory async cache with TTL."""
+
+    def __init__(self, ttl: int) -> None:
+        self._ttl = ttl
+        self._store: Dict[str, Tuple[float, Any]] = {}
+        self._lock = asyncio.Lock()
+
+    async def get(self, key: str) -> Optional[Any]:
+        async with self._lock:
+            entry = self._store.get(key)
+            if not entry:
+                return None
+            timestamp, value = entry
+            if time.monotonic() - timestamp > self._ttl:
+                del self._store[key]
+                return None
+            return value
+
+    async def set(self, key: str, value: Any) -> None:
+        async with self._lock:
+            self._store[key] = (time.monotonic(), value)
+
+    async def clear(self) -> None:
+        async with self._lock:
+            self._store.clear()
+
+
 class SecureOHLCVDownloader:
     """
     Secure OHLCV data downloader with comprehensive input validation,
@@ -244,6 +272,7 @@ class SecureOHLCVDownloader:
         self.config = config or load_global_config(os.getenv("OHLCV_CONFIG_FILE"))
         self.rate_limiter = RateLimiter(int(os.getenv("API_RATE", "5")), 60.0)
         self.circuit_breaker = CircuitBreaker(3, 60.0)
+        self.cache = APICache(self.config.cache_ttl)
         self._setup_logging()
         self._validate_output_directory()
         self.audit = AuditLogger(
@@ -751,6 +780,12 @@ class SecureOHLCVDownloader:
     async def _yahoo_history(
         self, ticker: str, start_date: date, end_date: date, interval: str
     ) -> pd.DataFrame:
+        """Retrieve historical data from Yahoo Finance with caching."""
+        key = f"yahoo:{ticker}:{start_date}:{end_date}:{interval}"
+        cached = await self.cache.get(key)
+        if cached is not None:
+            self.logger.info("Cache hit for Yahoo data")
+            return cached
         async def _call() -> pd.DataFrame:
             stock = yf.Ticker(ticker)
             return await asyncio.to_thread(
@@ -761,12 +796,14 @@ class SecureOHLCVDownloader:
             )
 
         await self.rate_limiter.acquire()
-        return await self.circuit_breaker.call(_call)
+        data = await self.circuit_breaker.call(_call)
+        await self.cache.set(key, data)
+        return data
 
     def _download_alpha_vantage_secure(self, ticker: str) -> pd.DataFrame:
         """
-        Securely download data from Alpha Vantage with JSON validation and
-        certificate pinning
+        Securely download data from Alpha Vantage with JSON validation,
+        certificate pinning, and response caching
 
         Args:
             ticker: Validated ticker symbol
@@ -779,6 +816,12 @@ class SecureOHLCVDownloader:
             raise ValidationError(
                 "Alpha Vantage API key not found in environment variables"
             )
+
+        cache_key = f"alpha_vantage:{ticker}"
+        cached = asyncio.run(self.cache.get(cache_key))
+        if cached is not None:
+            self.logger.info("Cache hit for Alpha Vantage data")
+            return cached
 
         url = "https://www.alphavantage.co/query"
         params = {
@@ -837,6 +880,7 @@ class SecureOHLCVDownloader:
             df.set_index("Date", inplace=True)
             df.sort_index(inplace=True)
 
+            asyncio.run(self.cache.set(cache_key, df))
             return df
 
         except requests.RequestException as e:
