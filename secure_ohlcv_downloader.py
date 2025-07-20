@@ -24,6 +24,10 @@ from src.secure_ohlcv_downloader import (
     FileLockTimeoutError,
     ConfigurationManager,
     SecurityValidationError,
+    RateLimiter,
+    CircuitBreaker,
+    SecurityEventMonitor,
+    FingerprintAdapter,
 )
 
 from dataclasses import dataclass
@@ -107,6 +111,10 @@ __all__ = [
     "FileLockTimeoutError",
     "ConfigurationManager",
     "SecurityValidationError",
+    "RateLimiter",
+    "CircuitBreaker",
+    "SecurityEventMonitor",
+    "FingerprintAdapter",
 ]
 
 
