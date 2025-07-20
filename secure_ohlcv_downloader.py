@@ -19,7 +19,7 @@ import yfinance as yf
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from jsonschema import validate
+from jsonschema import validate, exceptions as jsonschema_exceptions
 from cryptography.fernet import Fernet, InvalidToken
 from io import BytesIO
 from keyring import errors as keyring_errors
@@ -132,12 +132,20 @@ class CircuitBreaker:
                 raise SecurityError("Circuit breaker open")
         try:
             result = await func(*args, **kwargs)
-        except Exception:
+        except (
+            SecurityError,
+            ValidationError,
+            CredentialError,
+            requests.RequestException,
+            OSError,
+            ValueError,
+            KeyError,
+        ) as exc:
             self._failures += 1
             if self._failures >= self._max_failures:
                 self._state = "open"
                 self._opened = time.monotonic()
-            raise
+            raise exc
         else:
             if self._state == "half":
                 self._state = "closed"
@@ -157,7 +165,7 @@ class SecureOHLCVDownloader:
     # Pre-compiled date pattern with timeout to mitigate ReDoS
     try:
         DATE_PATTERN = regex.compile(r"^\d{4}-\d{2}-\d{2}$", timeout=0.1)
-    except Exception:
+    except (regex.TimeoutError, regex.error):
         DATE_PATTERN = regex.compile(r"^\d{4}-\d{2}-\d{2}$")
 
     # Valid intervals
@@ -273,7 +281,7 @@ class SecureOHLCVDownloader:
             self.output_dir.mkdir(parents=True, exist_ok=True)
             # Set restrictive permissions (owner read/write/execute only)
             os.chmod(self.output_dir, 0o700)
-        except Exception as e:
+        except OSError as e:
             sanitized = self._sanitize_error(str(e))
             raise SecurityError(
                 f"Failed to create secure output directory: {sanitized}"
@@ -512,7 +520,11 @@ class SecureOHLCVDownloader:
                 self._validate_date_key(str(key))
 
             validate(instance=response_data, schema=schema)
-        except Exception as e:
+        except (
+            ValidationError,
+            jsonschema_exceptions.ValidationError,
+            TypeError,
+        ) as e:
             raise ValidationError(
                 f"API response validation failed: {self._sanitize_error(str(e))}"
             )
@@ -596,7 +608,15 @@ class SecureOHLCVDownloader:
             self.logger.info(f"Download completed successfully: {len(data)} records")
             return file_path
 
-        except Exception as e:
+        except (
+            ValidationError,
+            SecurityError,
+            CredentialError,
+            requests.RequestException,
+            OSError,
+            ValueError,
+            KeyError,
+        ) as e:
             error_msg = self._sanitize_error(str(e))
             self.logger.error(f"Download failed: {error_msg}")
             raise
@@ -631,7 +651,11 @@ class SecureOHLCVDownloader:
 
             return data
 
-        except Exception as e:
+        except (
+            requests.RequestException,
+            ValueError,
+            KeyError,
+        ) as e:
             raise ValidationError(
                 f"Yahoo Finance download failed: {self._sanitize_error(str(e))}"
             )

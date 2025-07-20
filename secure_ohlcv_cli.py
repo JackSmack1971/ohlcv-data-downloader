@@ -26,6 +26,7 @@ from secure_ohlcv_downloader import (
     DownloadConfig,
     ValidationError,
     SecurityError,
+    CredentialError,
 )
 
 
@@ -215,7 +216,7 @@ Examples:
         # Initialize secure downloader
         try:
             self.downloader = SecureOHLCVDownloader(str(args.output_dir))
-        except Exception as e:
+        except (SecurityError, CredentialError, ValidationError, OSError) as e:
             print(f"❌ Failed to initialize secure downloader: {e}")
             sys.exit(1)
 
@@ -387,17 +388,10 @@ Examples:
             print("\n⚠️  Download interrupted by user")
             sys.exit(1)
 
-        except (ValidationError, SecurityError) as e:
+        except (ValidationError, SecurityError, CredentialError, OSError, requests.RequestException) as e:
             print(f"❌ Security/Validation Error: {e}")
             sys.exit(1)
 
-        except Exception as e:
-            print(f"❌ Unexpected error: {e}")
-            if args.verbose:
-                import traceback
-
-                traceback.print_exc()
-            sys.exit(1)
 
 
 def main():
