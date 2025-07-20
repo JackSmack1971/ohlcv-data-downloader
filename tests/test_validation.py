@@ -14,6 +14,13 @@ def test_sanitize_error(tmp_path):
     assert "token=[REDACTED]" in error
 
 
+def test_sanitize_error_password(tmp_path):
+    dl = create_downloader(tmp_path)
+    error = dl._sanitize_error("/tmp/secret.txt password=supersecret")
+    assert "password=[REDACTED]" in error
+    assert "supersecret" not in error
+
+
 def test_validate_interval_invalid(tmp_path):
     dl = create_downloader(tmp_path)
     with pytest.raises(ValidationError):

@@ -171,6 +171,19 @@ class SecureOHLCVDownloader:
     except Exception:
         DATE_PATTERN = regex.compile(r"^\d{4}-\d{2}-\d{2}$")
 
+    # Pre-compiled pattern for error sanitization with timeout
+    try:
+        SANITIZE_PATTERN = regex.compile(
+            r"(?P<path>/\S+)|(?P<key>key[=:]\s*\S+)|(?P<token>token[=:]\s*\S+)|(?P<password>password[=:]\s*\S+)",
+            regex.IGNORECASE,
+            timeout=0.05,
+        )
+    except Exception:
+        SANITIZE_PATTERN = regex.compile(
+            r"(?P<path>/\S+)|(?P<key>key[=:]\s*\S+)|(?P<token>token[=:]\s*\S+)|(?P<password>password[=:]\s*\S+)",
+            regex.IGNORECASE,
+        )
+
     # Valid intervals
     VALID_INTERVALS = {
         "1d",
@@ -342,22 +355,18 @@ class SecureOHLCVDownloader:
         Returns:
             Sanitized error message
         """
-        # Remove file paths, API keys, and other sensitive information
-        sanitized = re.sub(r"/[^\s]*", "[PATH_REDACTED]", error_message)
-        sanitized = re.sub(
-            r"key[=:]\s*[^\s]+", "key=[REDACTED]", sanitized, flags=re.IGNORECASE
-        )
-        sanitized = re.sub(
-            r"token[=:]\s*[^\s]+", "token=[REDACTED]", sanitized, flags=re.IGNORECASE
-        )
-        sanitized = re.sub(
-            r"password[=:]\s*[^\s]+",
-            "password=[REDACTED]",
-            sanitized,
-            flags=re.IGNORECASE,
-        )
+        def replacer(match: regex.Match[str]) -> str:
+            if match.group("path"):
+                return "[PATH_REDACTED]"
+            if match.group("key"):
+                return "key=[REDACTED]"
+            if match.group("token"):
+                return "token=[REDACTED]"
+            if match.group("password"):
+                return "password=[REDACTED]"
+            return ""
 
-        return sanitized
+        return self.SANITIZE_PATTERN.sub(replacer, error_message, timeout=0.05)
 
     def _audit_event(self, action: str, details: Dict[str, Any]) -> None:
         """Log audit event and handle failures silently."""
