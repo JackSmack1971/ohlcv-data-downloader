@@ -3,7 +3,7 @@
 import json
 import re
 from datetime import date
-from typing import Any, Dict
+from typing import Any, Dict, Set
 
 from config import GlobalConfig
 from .exceptions import ValidationError, SecurityError
@@ -33,6 +33,20 @@ class SecureJSONValidator:
         return json.loads(json_data)
 
 
+class ChoiceValidator:
+    """Generic validator for enumerated choices."""
+
+    def __init__(self, choices: Set[str]) -> None:
+        self.choices = choices
+
+    def __call__(self, value: str, name: str = "value") -> str:
+        if value not in self.choices:
+            raise ValidationError(
+                f"Invalid {name}. Must be one of: {', '.join(self.choices)}"
+            )
+        return value
+
+
 class DataValidator:
     """Validate user supplied parameters and API responses."""
 
@@ -40,6 +54,22 @@ class DataValidator:
         self.config = config
         self.pattern_validator = SecurePatternValidator()
         self.json_validator = SecureJSONValidator()
+        self.interval_validator = ChoiceValidator(
+            {
+                "1d",
+                "1wk",
+                "1mo",
+                "3mo",
+                "6mo",
+                "1y",
+                "2y",
+                "5y",
+                "10y",
+                "ytd",
+                "max",
+            }
+        )
+        self.source_validator = ChoiceValidator({"yahoo", "alpha_vantage"})
 
     def validate_ticker(self, ticker: str) -> str:
         if not ticker:
@@ -65,28 +95,10 @@ class DataValidator:
             raise ValidationError(f"Date range too large. Maximum {max_days} days allowed")
 
     def validate_interval(self, interval: str) -> str:
-        valid = {
-            "1d",
-            "1wk",
-            "1mo",
-            "3mo",
-            "6mo",
-            "1y",
-            "2y",
-            "5y",
-            "10y",
-            "ytd",
-            "max",
-        }
-        if interval not in valid:
-            raise ValidationError(f"Invalid interval. Must be one of: {', '.join(valid)}")
-        return interval
+        return self.interval_validator(interval, "interval")
 
     def validate_source(self, source: str) -> str:
-        valid_sources = {"yahoo", "alpha_vantage"}
-        if source not in valid_sources:
-            raise ValidationError(f"Invalid source. Must be one of: {', '.join(valid_sources)}")
-        return source
+        return self.source_validator(source, "source")
 
     def validate_date_key(self, key: str) -> None:
         pattern = re.compile(r"^\d{4}-\d{2}-\d{2}$")
