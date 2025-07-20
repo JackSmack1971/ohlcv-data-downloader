@@ -8,6 +8,9 @@ import os
 import re
 import regex
 from utils import sanitize_error
+import sys
+import traceback
+from typing import List
 import json
 import logging
 import hashlib
@@ -78,6 +81,111 @@ class ValidationError(Exception):
 
     pass
 
+
+class SecurityExceptionHandler:
+    """Sanitize exception contexts to prevent information disclosure."""
+
+    SENSITIVE_PATTERNS = [
+        r"/home/[^/\s]+",
+        r"/Users/[^/\s]+",
+        r"C:\\Users\\[^\\]+",
+        r"api\s*key[\'\"\s]*[:=]?[\'\"\s]*[^\s\'\"]+",
+        r"password[\'\"\s]*[:=][\'\"\s]*[^\s\'\"]+",
+        r"secret[\'\"\s]*[:=][\'\"\s]*[^\s\'\"]+",
+        r"token[\'\"\s]*[:=][\'\"\s]*[^\s\'\"]+",
+        r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}",
+        r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
+    ]
+
+    def __init__(self) -> None:
+        self.security_logger = self._setup_security_logger()
+
+    def _setup_security_logger(self) -> logging.Logger:
+        logger = logging.getLogger("security")
+        if not logger.handlers:
+            handler = logging.FileHandler("logs/security_exceptions.log")
+            formatter = logging.Formatter(
+                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            )
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+            logger.setLevel(logging.ERROR)
+        return logger
+
+    def sanitize_exception_context(
+        self, exc: Exception, include_traceback: bool = False
+    ) -> Dict[str, Any]:
+        context = {
+            "error_type": type(exc).__name__,
+            "error_message": self._sanitize_message(str(exc)),
+            "timestamp": datetime.now().isoformat(),
+            "error_id": self._generate_error_id(),
+        }
+        if include_traceback:
+            context["traceback"] = self._sanitize_traceback()
+        self._log_full_exception_securely(exc, context["error_id"])
+        return context
+
+    def _sanitize_message(self, message: str) -> str:
+        sanitized = message
+        for pattern in self.SENSITIVE_PATTERNS:
+            sanitized = re.sub(pattern, "[REDACTED]", sanitized, flags=re.IGNORECASE)
+        sanitized = re.sub(r"/[^/\s]+/[^/\s]+/", "[PATH]/", sanitized)
+        sanitized = re.sub(r"[A-Z]:\\\\[^\\\\]+(?:\\\\[^\\\\]+)*", "[PATH]", sanitized)
+        return sanitized
+
+    def _sanitize_traceback(self) -> List[str]:
+        tb_lines = traceback.format_exc().split("\n")
+        sanitized_lines: List[str] = []
+        for line in tb_lines:
+            if 'File "' in line:
+                match = re.search(r'File "([^"]+)", line (\d+), in (.+)', line)
+                if match:
+                    filename = os.path.basename(match.group(1))
+                    line_num = match.group(2)
+                    func_name = match.group(3)
+                    sanitized_lines.append(
+                        f'File "{filename}", line {line_num}, in {func_name}'
+                    )
+                else:
+                    sanitized_lines.append("[TRACEBACK LINE REDACTED]")
+            else:
+                sanitized_lines.append(self._sanitize_message(line))
+        return sanitized_lines
+
+    def _generate_error_id(self) -> str:
+        import uuid
+        return f"ERR-{uuid.uuid4().hex[:8].upper()}"
+
+    def _log_full_exception_securely(self, exc: Exception, error_id: str) -> None:
+        secure_log = {
+            "error_id": error_id,
+            "exception_type": type(exc).__name__,
+            "exception_args": exc.args,
+            "full_traceback": traceback.format_exc(),
+            "local_variables": self._extract_safe_local_variables(),
+            "timestamp": datetime.now().isoformat(),
+        }
+        self.security_logger.error("Security exception logged", extra={"secure_data": secure_log})
+
+    def _extract_safe_local_variables(self) -> Dict[str, str]:
+        frame = sys.exc_info()[2].tb_frame if sys.exc_info()[2] else None
+        safe_vars: Dict[str, str] = {}
+        if frame:
+            for name, value in frame.f_locals.items():
+                if name.startswith("_"):
+                    continue
+                safe_vars[name] = self._sanitize_variable_value(name, value)
+        return safe_vars
+
+    def _sanitize_variable_value(self, name: str, value: Any) -> str:
+        sensitive_names = ["password", "api_key", "secret", "token", "key"]
+        if any(s in name.lower() for s in sensitive_names):
+            return "[SENSITIVE_VARIABLE_REDACTED]"
+        try:
+            return self._sanitize_message(str(value))
+        except Exception:
+            return "[VARIABLE_CONVERSION_FAILED]"
 
 class FingerprintAdapter(HTTPAdapter):
     """HTTPAdapter that validates server certificate fingerprint."""
@@ -364,6 +472,7 @@ class SecureOHLCVDownloader:
         self.rate_limiter = RateLimiter(int(os.getenv("API_RATE", "5")), 60.0)
         self.circuit_breaker = CircuitBreaker(3, 60.0)
         self.cache = APICache(self.config.cache_ttl)
+        self.exception_handler = SecurityExceptionHandler()
         self._setup_logging()
         self._validate_output_directory()
         self.audit = AuditLogger(
@@ -384,6 +493,7 @@ class SecureOHLCVDownloader:
             ],
         )
         self.logger = logging.getLogger(__name__)
+        self.security_logger = self.exception_handler.security_logger
 
     def _setup_encryption(self) -> None:
         """Setup encryption for sensitive data storage with key persistence."""
@@ -467,7 +577,21 @@ class SecureOHLCVDownloader:
         Returns:
             Sanitized error message
         """
-        return sanitize_error(error_message)
+        exc = sys.exc_info()[1] or Exception(error_message)
+        context = self.exception_handler.sanitize_exception_context(exc)
+        return context["error_message"]
+
+    def _handle_security_exception(self, exc: Exception, operation: str) -> Dict[str, Any]:
+        sanitized = self.exception_handler.sanitize_exception_context(exc, include_traceback=True)
+        self.security_logger.warning(
+            f"Security exception in {operation}",
+            extra={
+                "operation": operation,
+                "error_id": sanitized["error_id"],
+                "error_type": sanitized["error_type"],
+            },
+        )
+        return sanitized
 
     def _audit_event(self, action: str, details: Dict[str, Any]) -> None:
         """Log audit event and handle failures silently."""
@@ -770,8 +894,8 @@ class SecureOHLCVDownloader:
             ValueError,
             KeyError,
         ) as e:
-            error_msg = self._sanitize_error(str(e))
-            self.logger.error(f"Download failed: {error_msg}")
+            sanitized = self._handle_security_exception(e, "download")
+            self.logger.error(f"Download failed: {sanitized['error_message']}")
             raise
 
     def _download_yahoo_secure(
