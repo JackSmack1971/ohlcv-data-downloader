@@ -7,6 +7,7 @@ Addresses critical security vulnerabilities from audit SEC-2025-001 through SEC-
 import os
 import re
 import regex
+from utils import sanitize_error
 import json
 import logging
 import hashlib
@@ -174,18 +175,6 @@ class SecureOHLCVDownloader:
     except Exception:
         DATE_PATTERN = regex.compile(r"^\d{4}-\d{2}-\d{2}$")
 
-    # Pre-compiled pattern for error sanitization with timeout
-    try:
-        SANITIZE_PATTERN = regex.compile(
-            r"(?P<path>/\S+)|(?P<key>key[=:]\s*\S+)|(?P<token>token[=:]\s*\S+)|(?P<password>password[=:]\s*\S+)",
-            regex.IGNORECASE,
-            timeout=0.05,
-        )
-    except Exception:
-        SANITIZE_PATTERN = regex.compile(
-            r"(?P<path>/\S+)|(?P<key>key[=:]\s*\S+)|(?P<token>token[=:]\s*\S+)|(?P<password>password[=:]\s*\S+)",
-            regex.IGNORECASE,
-        )
 
     # Valid intervals
     VALID_INTERVALS = {
@@ -358,18 +347,7 @@ class SecureOHLCVDownloader:
         Returns:
             Sanitized error message
         """
-        def replacer(match: regex.Match[str]) -> str:
-            if match.group("path"):
-                return "[PATH_REDACTED]"
-            if match.group("key"):
-                return "key=[REDACTED]"
-            if match.group("token"):
-                return "token=[REDACTED]"
-            if match.group("password"):
-                return "password=[REDACTED]"
-            return ""
-
-        return self.SANITIZE_PATTERN.sub(replacer, error_message, timeout=0.05)
+        return sanitize_error(error_message)
 
     def _audit_event(self, action: str, details: Dict[str, Any]) -> None:
         """Log audit event and handle failures silently."""
