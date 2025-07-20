@@ -205,3 +205,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+# Security reports and performance outputs
+security_scan.json
+safety_report.json
+flake8_report.txt
+mypy_report.txt
+perf_report.json
