@@ -26,6 +26,7 @@ from keyring import errors as keyring_errors
 import keyring
 from keyrings.alt.file import PlaintextKeyring
 from dotenv import load_dotenv
+from config import GlobalConfig, load_global_config
 import tempfile
 import shutil
 import asyncio
@@ -165,7 +166,7 @@ class SecureOHLCVDownloader:
     # Pre-compiled date pattern with timeout to mitigate ReDoS
     try:
         DATE_PATTERN = regex.compile(r"^\d{4}-\d{2}-\d{2}$", timeout=0.1)
-    except (regex.TimeoutError, regex.error):
+    except Exception:
         DATE_PATTERN = regex.compile(r"^\d{4}-\d{2}-\d{2}$")
 
     # Valid intervals
@@ -225,7 +226,7 @@ class SecureOHLCVDownloader:
         },
     }
 
-    def __init__(self, output_dir: str = "/home/user/output"):
+    def __init__(self, output_dir: str = "/home/user/output", config: Optional[GlobalConfig] = None):
         """
         Initialize secure OHLCV downloader
 
@@ -233,6 +234,7 @@ class SecureOHLCVDownloader:
             output_dir: Base directory for output files
         """
         self.output_dir = Path(output_dir).resolve()
+        self.config = config or load_global_config(os.getenv("OHLCV_CONFIG_FILE"))
         self.rate_limiter = RateLimiter(int(os.getenv("API_RATE", "5")), 60.0)
         self.circuit_breaker = CircuitBreaker(3, 60.0)
         self._setup_logging()
@@ -279,8 +281,7 @@ class SecureOHLCVDownloader:
         """Validate and create output directory with proper permissions"""
         try:
             self.output_dir.mkdir(parents=True, exist_ok=True)
-            # Set restrictive permissions (owner read/write/execute only)
-            os.chmod(self.output_dir, 0o700)
+            os.chmod(self.output_dir, self.config.dir_permissions)
         except OSError as e:
             sanitized = self._sanitize_error(str(e))
             raise SecurityError(
@@ -399,7 +400,7 @@ class SecureOHLCVDownloader:
             raise ValidationError("End date cannot be in the future")
 
         # Reasonable date range limits (prevent excessive API calls)
-        max_days = 3650  # 10 years
+        max_days = self.config.max_date_range_days
         if (end_date - start_date).days > max_days:
             raise ValidationError(
                 f"Date range too large. Maximum {max_days} days allowed"
@@ -482,7 +483,7 @@ class SecureOHLCVDownloader:
             if not str(final_resolved).startswith(str(output_root)):
                 raise SecurityError("Path traversal attempt detected after creation")
 
-            os.chmod(target_dir, 0o700)
+            os.chmod(target_dir, self.config.dir_permissions)
         finally:
             if os.name == "posix":
                 fcntl.flock(lock_file, fcntl.LOCK_UN)
@@ -600,7 +601,7 @@ class SecureOHLCVDownloader:
                 data.to_csv(file_path, index=True)
 
             # Set secure file permissions
-            os.chmod(file_path, 0o600)
+            os.chmod(file_path, self.config.file_permissions)
 
             # Create metadata
             self._create_metadata(config, output_path, len(data))
@@ -725,12 +726,14 @@ class SecureOHLCVDownloader:
                 "https://www.alphavantage.co", self.ALPHA_VANTAGE_FINGERPRINT
             )
             response = asyncio.run(
-                self._fetch_with_limit(session, url, params=params, timeout=30)
+                self._fetch_with_limit(
+                    session, url, params=params, timeout=self.config.request_timeout
+                )
             )
             response.raise_for_status()
 
             # Validate response size (prevent memory exhaustion)
-            if len(response.content) > 10 * 1024 * 1024:  # 10MB limit
+            if len(response.content) > self.config.max_api_response_size:
                 raise ValidationError("API response too large")
 
             data = response.json()
@@ -826,7 +829,7 @@ class SecureOHLCVDownloader:
             json.dump(metadata, f, indent=2)
 
         # Set secure permissions
-        os.chmod(metadata_path, 0o600)
+        os.chmod(metadata_path, self.config.file_permissions)
 
     def _calculate_checksum(self, file_path: Path) -> str:
         """
