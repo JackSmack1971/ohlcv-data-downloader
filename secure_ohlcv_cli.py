@@ -16,6 +16,7 @@ import os
 import keyring
 from keyring import errors as keyring_errors
 from dotenv import load_dotenv
+from config import GlobalConfig, load_global_config
 
 # Load environment variables
 load_dotenv()
@@ -38,6 +39,7 @@ class SecureCLI:
 
     def __init__(self):
         self.downloader = None
+        self.config = load_global_config(os.getenv("OHLCV_CONFIG_FILE"))
 
     def create_parser(self) -> argparse.ArgumentParser:
         """
@@ -215,7 +217,9 @@ Examples:
 
         # Initialize secure downloader
         try:
-            self.downloader = SecureOHLCVDownloader(str(args.output_dir))
+            self.downloader = SecureOHLCVDownloader(
+                str(args.output_dir), config=self.config
+            )
         except (SecurityError, CredentialError, ValidationError, OSError) as e:
             print(f"❌ Failed to initialize secure downloader: {e}")
             sys.exit(1)
@@ -328,8 +332,10 @@ Examples:
 
             # Validate date range size (prevent excessive API calls)
             date_diff = (args.end_date - args.start_date).days
-            if date_diff > 3650:  # 10 years
-                raise ValueError("Date range too large (maximum 10 years)")
+            if date_diff > self.config.max_date_range_days:
+                raise ValueError(
+                    f"Date range too large (maximum {self.config.max_date_range_days} days)"
+                )
 
             # Validate output directory
             if not args.output_dir.parent.exists():
