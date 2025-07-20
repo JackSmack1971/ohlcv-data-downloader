@@ -288,6 +288,7 @@ pylint --load-plugins=pylint_security secure_ohlcv_*.py
 
 ### GDPR (General Data Protection Regulation)
 - ✅ Data minimization principles
+- ✅ Data retention policy with automatic cleanup
 - ✅ Secure data processing
 - ✅ Data subject rights consideration
 - ✅ Privacy by design implementation

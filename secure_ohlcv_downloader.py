@@ -43,6 +43,8 @@ else:
 # Load environment variables
 load_dotenv()
 
+DEFAULT_RETENTION_DAYS = 2555
+
 
 @dataclass
 class DownloadConfig:
@@ -666,6 +668,7 @@ class SecureOHLCVDownloader:
             self._create_metadata(config, output_path, record_count)
 
             self.logger.info(f"Download completed successfully: {record_count} records")
+            asyncio.run(self.cleanup_expired_data(self.config.retention_days))
             return file_path
 
         except (
@@ -952,3 +955,39 @@ class SecureOHLCVDownloader:
             return hash_sha256.hexdigest()
         except FileNotFoundError:
             return "file_not_found"
+
+    async def _remove_path(self, path: Path) -> None:
+        try:
+            if path.is_dir():
+                await asyncio.to_thread(shutil.rmtree, path)
+            else:
+                await asyncio.to_thread(path.unlink)
+            self._audit_event("data_cleanup", {"path": str(path)})
+        except OSError as e:
+            self.logger.error(
+                f"Cleanup failed: {self._sanitize_error(str(e))}"
+            )
+
+    async def cleanup_expired_data(
+        self, retention_days: int = DEFAULT_RETENTION_DAYS
+    ) -> None:
+        cutoff = datetime.now() - timedelta(days=retention_days)
+        data_root = self.output_dir / "data"
+        if not data_root.exists():
+            return
+        for path in data_root.rglob("*"):
+            try:
+                mtime = datetime.fromtimestamp(path.stat().st_mtime)
+            except OSError as e:
+                self.logger.error(
+                    f"Retention stat failed: {self._sanitize_error(str(e))}"
+                )
+                continue
+            if mtime < cutoff:
+                await self._remove_path(path)
+        for dir_path in sorted(data_root.rglob("*"), reverse=True):
+            if dir_path.is_dir():
+                try:
+                    dir_path.rmdir()
+                except OSError:
+                    pass

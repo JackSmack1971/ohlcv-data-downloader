@@ -13,6 +13,7 @@ A comprehensive Python application for downloading OHLCV (Open, High, Low, Close
 - **Metadata Tracking**: JSON metadata files with download information
 - **Error Handling**: Robust error handling with user-friendly messages
 - **Batch Downloads**: Download from all sources simultaneously
+- **Data Retention**: Automatic cleanup of files older than a configurable period
 
 ## 📋 Requirements
 
