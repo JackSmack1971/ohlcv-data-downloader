@@ -250,9 +250,14 @@ Logs are saved to `secure_downloader.log` and include:
 ### Debug Mode
 
 Enable verbose logging for detailed information:
+
 ```bash
 python secure_ohlcv_cli.py AAPL --verbose
 ```
+
+## 🛠️ Operations
+
+Refer to [OPERATIONS.md](OPERATIONS.md) for detailed production deployment and maintenance procedures. The guide covers environment setup, monitoring strategies, routine maintenance, capacity planning, and disaster recovery steps.
 
 ## 🤝 Contributing
 
