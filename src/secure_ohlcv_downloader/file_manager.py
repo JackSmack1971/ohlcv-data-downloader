@@ -24,6 +24,13 @@ class FileManager:
         self.lock_manager = CrossPlatformFileLockManager()
 
     def create_secure_path(self, ticker: str, date_range: str, output_dir: Path) -> Path:
+        """Create a sanitized directory for downloaded data.
+
+        The path is validated to prevent directory traversal by confirming
+        the resolved path remains under ``output_dir`` both before and after
+        creation. A temporary directory and file lock are used to mitigate
+        race conditions during directory setup.
+        """
         output_root = output_dir.resolve()
         target_dir = output_root / "data" / ticker / date_range
         resolved = target_dir.resolve() if target_dir.exists() else target_dir
@@ -47,6 +54,12 @@ class FileManager:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
     async def save_encrypted(self, data: bytes, file_path: Path) -> None:
+        """Encrypt and persist data asynchronously.
+
+        Attack scenario: writing unencrypted sensitive data to disk. Data is
+        encrypted in a background thread prior to being written. File
+        permissions are hardened after writing to reduce exposure.
+        """
         encrypted = await asyncio.to_thread(self.encryption.encrypt, data)
         async with asyncio.Lock():
             async with aiofiles.open(file_path, "wb") as f:
@@ -54,6 +67,7 @@ class FileManager:
         await asyncio.to_thread(os.chmod, file_path, self.config.file_permissions)
 
     async def calculate_checksum(self, path: Path) -> str:
+        """Return a SHA-256 checksum for *path* without loading entire file."""
         import hashlib
 
         h = hashlib.sha256()
@@ -66,6 +80,11 @@ class FileManager:
         return h.hexdigest()
 
     async def remove_path(self, path: Path) -> None:
+        """Remove a file or directory securely.
+
+        Uses background threads to avoid blocking the event loop and ensures
+        both files and directories are handled correctly.
+        """
         if path.is_dir():
             await asyncio.to_thread(shutil.rmtree, path)
         else:

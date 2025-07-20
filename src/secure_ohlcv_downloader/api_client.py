@@ -17,6 +17,13 @@ class APIClient:
         self.cert_manager = cert_manager
 
     def create_pinned_session(self, host: str, fingerprint: str) -> requests.Session:
+        """Create a requests session that pins the server certificate.
+
+        The session uses :class:`FingerprintAdapter` to verify the TLS
+        fingerprint for every connection. Failure to match results in a
+        :class:`SecurityError`. Retry logic is configured to resist transient
+        network issues without indefinite blocking.
+        """
         session = requests.Session()
         retries = Retry(total=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
         adapter = FingerprintAdapter(fingerprint, max_retries=retries)
@@ -25,6 +32,13 @@ class APIClient:
         return session
 
     def fetch(self, session: requests.Session, url: str, **kwargs: Any) -> requests.Response:
+        """Perform a GET request with standard timeout and error handling.
+
+        Attack vector: if no timeout is specified an attacker could hold the
+        connection open and exhaust resources. A default of 30 seconds is
+        enforced and network errors raise :class:`SecurityError` to avoid
+        leaking stack traces.
+        """
         try:
             return session.get(url, timeout=kwargs.get("timeout", 30), **kwargs)
         except requests.RequestException as exc:

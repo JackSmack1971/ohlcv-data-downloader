@@ -17,6 +17,12 @@ class ConfigurationManager:
         self.config = load_global_config(config_path)
 
     def get_api_key(self, service: str) -> Optional[str]:
+        """Retrieve an API key from environment or system keyring.
+
+        Security requirement: keys must never be hardcoded. Environment
+        variables are checked first to support containerized deployments,
+        falling back to the OS keyring for local usage.
+        """
         key_name = f"{service.upper()}_API_KEY"
         api_key = os.getenv(key_name)
         if not api_key:

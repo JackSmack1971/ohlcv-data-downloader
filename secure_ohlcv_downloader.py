@@ -48,6 +48,13 @@ class SecurityExceptionHandler:
         self.security_logger = logging.getLogger("security")
 
     def sanitize_exception_context(self, exc: Exception, include_traceback: bool = False) -> Dict[str, Any]:
+        """Return a sanitized dictionary describing *exc*.
+
+        Edge cases: unexpected exception types may include sensitive user input
+        or file paths. This helper removes known secrets and optionally the
+        traceback to avoid information disclosure while still providing
+        actionable diagnostics.
+        """
         context = {
             "error_type": type(exc).__name__,
             "error_message": self._sanitize_message(str(exc)),
