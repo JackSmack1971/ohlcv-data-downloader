@@ -6,8 +6,10 @@ build-backend = "setuptools.build_meta"
 name = "secure-ohlcv-downloader"
 version = "1.0.0"
 description = "Secure financial data downloader with comprehensive security controls"
+readme = "README.md"
 authors = [{name = "Security Team", email = "security@example.com"}]
 license = {text = "MIT"}
+requires-python = ">=3.8"
 dependencies = [
     "aiofiles>=0.8.0",
     "aiohttp>=3.8.0",
