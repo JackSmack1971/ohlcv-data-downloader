@@ -12,7 +12,7 @@ import logging
 import hashlib
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable, Awaitable, TypeVar
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import getpass
 from dataclasses import dataclass
 import pandas as pd
@@ -33,6 +33,7 @@ import tempfile
 import shutil
 import asyncio
 import time
+import psutil
 
 if os.name == "posix":
     import fcntl
@@ -378,6 +379,12 @@ class SecureOHLCVDownloader:
                 f"Audit log failure: {self._sanitize_error(str(exc))}"
             )
 
+    def _check_memory(self) -> None:
+        """Raise SecurityError if available memory is below threshold."""
+        available_mb = psutil.virtual_memory().available / (1024 * 1024)
+        if available_mb < self.config.max_memory_mb:
+            raise SecurityError("Available memory below configured limit")
+
     def _validate_ticker(self, ticker: str) -> str:
         """
         Validate and sanitize ticker symbol to prevent path traversal
@@ -613,25 +620,37 @@ class SecureOHLCVDownloader:
             )
 
             # Download data based on source
+            filename = f"{ticker}_{source}.csv"
+            file_path = output_path / filename
+            record_count = 0
+
             if source == "yahoo":
-                data = self._download_yahoo_secure(
-                    ticker, config.start_date, config.end_date, interval
-                )
+                if (config.end_date - config.start_date).days > self.config.chunk_size_days:
+                    record_count = self._download_yahoo_stream(
+                        ticker, config.start_date, config.end_date, interval, file_path
+                    )
+                    data = None
+                else:
+                    data = self._download_yahoo_secure(
+                        ticker, config.start_date, config.end_date, interval
+                    )
+                    record_count = len(data)
             elif source == "alpha_vantage":
                 data = self._download_alpha_vantage_secure(ticker)
+                record_count = len(data)
             else:
                 raise ValidationError(f"Unsupported source: {source}")
 
-            # Save data securely
-            filename = f"{ticker}_{source}.csv"
-            file_path = output_path / filename
-
             if config.encrypt_data:
-                self._save_encrypted_data(data, file_path)
+                if record_count and data is not None:
+                    self._save_encrypted_data(data, file_path)
+                else:
+                    self._encrypt_existing_file(file_path)
+                file_path = Path(f"{file_path}.encrypted")
             else:
-                data.to_csv(file_path, index=True)
+                if data is not None:
+                    data.to_csv(file_path, index=True)
 
-            # Set secure file permissions
             os.chmod(file_path, self.config.file_permissions)
 
             self._audit_event(
@@ -640,14 +659,13 @@ class SecureOHLCVDownloader:
                     "ticker": ticker,
                     "source": source,
                     "file": str(file_path),
-                    "records": len(data),
+                    "records": record_count,
                 },
             )
 
-            # Create metadata
-            self._create_metadata(config, output_path, len(data))
+            self._create_metadata(config, output_path, record_count)
 
-            self.logger.info(f"Download completed successfully: {len(data)} records")
+            self.logger.info(f"Download completed successfully: {record_count} records")
             return file_path
 
         except (
@@ -701,6 +719,33 @@ class SecureOHLCVDownloader:
             raise ValidationError(
                 f"Yahoo Finance download failed: {self._sanitize_error(str(e))}"
             )
+
+    def _download_yahoo_stream(
+        self,
+        ticker: str,
+        start_date: date,
+        end_date: date,
+        interval: str,
+        file_path: Path,
+    ) -> int:
+        """Download Yahoo data in chunks and stream to CSV."""
+        total = 0
+        header = True
+        current = start_date
+        while current <= end_date:
+            self._check_memory()
+            chunk_end = min(
+                current + timedelta(days=self.config.chunk_size_days - 1), end_date
+            )
+            df = asyncio.run(
+                self._yahoo_history(ticker, current, chunk_end, interval)
+            )
+            if not df.empty:
+                total += len(df)
+                df.to_csv(file_path, mode="a", header=header)
+                header = False
+            current = chunk_end + timedelta(days=1)
+        return total
 
     def _create_pinned_session(self, host: str, fingerprint: str) -> requests.Session:
         """Create a requests session with certificate pinning and retries."""
@@ -840,6 +885,18 @@ class SecureOHLCVDownloader:
         with open(f"{file_path}.encrypted", "wb") as f:
             f.write(encrypted_data)
 
+        self.logger.info("Data saved with encryption")
+        self._audit_event("save_encrypted", {"file": f"{file_path}.encrypted"})
+
+    def _encrypt_existing_file(self, file_path: Path) -> None:
+        """Encrypt an existing CSV file in place."""
+        self._check_memory()
+        with open(file_path, "rb") as f:
+            data = f.read()
+        encrypted = self.cipher.encrypt(data)
+        with open(f"{file_path}.encrypted", "wb") as f:
+            f.write(encrypted)
+        os.remove(file_path)
         self.logger.info("Data saved with encryption")
         self._audit_event("save_encrypted", {"file": f"{file_path}.encrypted"})
 
