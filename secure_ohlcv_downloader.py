@@ -424,23 +424,32 @@ class SecureOHLCVDownloader:
     # Valid data sources
     VALID_SOURCES = {"yahoo", "alpha_vantage"}
 
-
+    # JSON security limits
+    MAX_JSON_DEPTH = 10
+    MAX_OBJECT_PROPERTIES = 1000
+    MAX_ARRAY_LENGTH = 10000
+    MAX_STRING_LENGTH = 10000
+    MAX_MEMORY_MB = 100
 
     # JSON schema for Alpha Vantage API response validation
     ALPHA_VANTAGE_SCHEMA = {
         "type": "object",
+        "required": ["Meta Data", "Time Series (Daily)"],
+        "maxProperties": 10,
         "properties": {
             "Time Series (Daily)": {
                 "type": "object",
+                "maxProperties": 1000,
                 "patternProperties": {
                     r"^\d{4}-\d{2}-\d{2}$": {
                         "type": "object",
+                        "maxProperties": 10,
                         "properties": {
-                            "1. open": {"type": "string"},
-                            "2. high": {"type": "string"},
-                            "3. low": {"type": "string"},
-                            "4. close": {"type": "string"},
-                            "5. volume": {"type": "string"},
+                            "1. open": {"type": "string", "maxLength": 20},
+                            "2. high": {"type": "string", "maxLength": 20},
+                            "3. low": {"type": "string", "maxLength": 20},
+                            "4. close": {"type": "string", "maxLength": 20},
+                            "5. volume": {"type": "string", "maxLength": 20},
                         },
                         "required": [
                             "1. open",
@@ -454,9 +463,17 @@ class SecureOHLCVDownloader:
             },
             "Meta Data": {
                 "type": "object",
-                "properties": {"2. Symbol": {"type": "string"}},
+                "maxProperties": 10,
+                "properties": {
+                    "1. Information": {"type": "string", "maxLength": 1000},
+                    "2. Symbol": {"type": "string", "maxLength": 20},
+                    "3. Last Refreshed": {"type": "string", "maxLength": 50},
+                    "4. Output Size": {"type": "string", "maxLength": 50},
+                    "5. Time Zone": {"type": "string", "maxLength": 50},
+                },
             },
         },
+        "additionalProperties": False,
     }
 
     def __init__(self, output_dir: str = "/home/user/output", config: Optional[GlobalConfig] = None):
@@ -755,26 +772,47 @@ class SecureOHLCVDownloader:
         if not self.DATE_PATTERN.fullmatch(key):
             raise ValidationError("Invalid date key format")
 
+    def _get_memory_usage(self) -> float:
+        """Return current process memory usage in MB."""
+        return psutil.Process().memory_info().rss / (1024 * 1024)
+
+    def _validate_structure_limits(self, data: Any, depth: int = 0) -> None:
+        """Recursively enforce JSON structure limits."""
+        if depth > self.MAX_JSON_DEPTH:
+            raise ValidationError("JSON depth exceeds limit")
+
+        if isinstance(data, dict):
+            if len(data) > self.MAX_OBJECT_PROPERTIES:
+                raise ValidationError("Object has too many properties")
+            for k, v in data.items():
+                if len(str(k)) > self.MAX_STRING_LENGTH:
+                    raise ValidationError("Property key too long")
+                self._validate_structure_limits(v, depth + 1)
+        elif isinstance(data, list):
+            if len(data) > self.MAX_ARRAY_LENGTH:
+                raise ValidationError("Array too large")
+            for item in data:
+                self._validate_structure_limits(item, depth + 1)
+        elif isinstance(data, str) and len(data) > self.MAX_STRING_LENGTH:
+            raise ValidationError("String too long")
+
     def _validate_json_response(
         self, response_data: Dict[Any, Any], schema: Dict[Any, Any]
     ) -> None:
-        """Validate JSON response with ReDoS protections.
-
-        Args:
-            response_data: JSON response data
-            schema: JSON schema for validation
-
-        Raises:
-            ValidationError: If validation fails
-        """
+        """Validate JSON response with resource protections."""
         try:
             time_series = response_data.get("Time Series (Daily)", {})
-            if len(time_series) > 10000:
+            if len(time_series) > self.MAX_OBJECT_PROPERTIES:
                 raise ValidationError("Time series too large")
             for key in time_series.keys():
                 self._validate_date_key(str(key))
 
+            self._validate_structure_limits(response_data)
+
+            start_mem = self._get_memory_usage()
             validate(instance=response_data, schema=schema)
+            if self._get_memory_usage() - start_mem > self.MAX_MEMORY_MB:
+                raise ValidationError("Excessive memory usage during validation")
         except (
             ValidationError,
             jsonschema_exceptions.ValidationError,
