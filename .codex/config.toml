@@ -1,0 +1,15 @@
+# Sequential Thinking MCP Server
+[mcp_servers.sequential-thinking]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+
+# Context7 MCP Server
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp"]
+
+# Perplexity Ask MCP Server
+[mcp_servers.perplexity-ask]
+command = "npx"
+args = ["-y", "server-perplexity-ask"]
+env = { "PERPLEXITY_API_KEY" = "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" }
