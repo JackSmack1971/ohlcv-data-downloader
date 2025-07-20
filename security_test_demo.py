@@ -13,7 +13,13 @@ from pathlib import Path
 sys.path.insert(0, '/home/user/output')
 
 try:
-    from secure_ohlcv_downloader import SecureOHLCVDownloader, DownloadConfig, ValidationError, SecurityError
+    from secure_ohlcv_downloader import (
+        SecureOHLCVDownloader,
+        DownloadConfig,
+        ValidationError,
+        SecurityError,
+        CredentialError,
+    )
 except ImportError as e:
     print(f"❌ Import error: {e}")
     print("Make sure secure_ohlcv_downloader.py is in the current directory")
