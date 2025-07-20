@@ -21,6 +21,17 @@ def test_sanitize_error_password(tmp_path):
     assert "supersecret" not in error
 
 
+def test_sanitize_error_function():
+    from utils import sanitize_error
+
+    msg = "/home/user/data key=mykey token=abc password=secret"
+    sanitized = sanitize_error(msg)
+    assert "[PATH_REDACTED]" in sanitized
+    assert "key=[REDACTED]" in sanitized
+    assert "token=[REDACTED]" in sanitized
+    assert "password=[REDACTED]" in sanitized
+
+
 def test_validate_interval_invalid(tmp_path):
     dl = create_downloader(tmp_path)
     with pytest.raises(ValidationError):
