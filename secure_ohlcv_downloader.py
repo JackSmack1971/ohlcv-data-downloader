@@ -35,6 +35,8 @@ import shutil
 import asyncio
 import time
 import psutil
+import ssl
+import socket
 
 if os.name == "posix":
     import fcntl
@@ -91,6 +93,95 @@ class FingerprintAdapter(HTTPAdapter):
         if digest != self.fingerprint:
             raise SecurityError("Certificate fingerprint mismatch")
 
+
+class CertificateAlertManager:
+    """Handle certificate-related security alerts."""
+
+    def send_certificate_alert(self, host: str, fingerprint: Optional[str], msg: str) -> None:
+        logging.error("CERT ALERT %s: %s %s", host, msg, fingerprint or "")
+
+
+class CertificateRotationDetector:
+    """Detect and control certificate rotations."""
+
+    def __init__(self) -> None:
+        self.rotation_history: Dict[str, datetime] = {}
+
+    def is_legitimate_rotation(self, new_fingerprint: str, host: str) -> bool:
+        last = self.rotation_history.get(host)
+        now = datetime.now()
+        if last and (now - last) < timedelta(hours=1):
+            return False
+        self.rotation_history[host] = now
+        return True
+
+
+class CertificateManager:
+    """Manage trusted SSL certificate fingerprints dynamically."""
+
+    def __init__(self, config_path: str = "config/certificates.json") -> None:
+        self.config_path = config_path
+        self.config = self._load_config()
+        self.valid_fingerprints = self.config.get("alpha_vantage_fingerprints", [])
+        self.rotation_detector = CertificateRotationDetector()
+        self.alert_manager = CertificateAlertManager()
+
+    def _load_config(self) -> Dict[str, Any]:
+        try:
+            with open(self.config_path, "r") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            default_fp = os.getenv(
+                "ALPHA_VANTAGE_FINGERPRINT",
+                "626ab34fbac6f21bd70928a741b93d7c5edda6af032dca527d17bffb8d34e523",
+            )
+            default = {
+                "alpha_vantage_fingerprints": [default_fp],
+                "last_updated": datetime.now().isoformat(),
+                "rotation_window_hours": 72,
+            }
+            self._save_config(default)
+            return default
+
+    def _save_config(self, data: Dict[str, Any]) -> None:
+        Path(self.config_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(self.config_path, "w") as f:
+            json.dump(data, f, indent=2)
+
+    def get_preferred_fingerprint(self) -> Optional[str]:
+        return self.valid_fingerprints[0] if self.valid_fingerprints else None
+
+    def validate_certificate(self, hostname: str, port: int = 443) -> bool:
+        try:
+            fingerprint, expires = self._get_certificate_details(hostname, port)
+            self._check_expiration(expires, hostname)
+            if fingerprint in self.valid_fingerprints:
+                return True
+            if self.rotation_detector.is_legitimate_rotation(fingerprint, hostname):
+                self.valid_fingerprints.insert(0, fingerprint)
+                self.config["alpha_vantage_fingerprints"] = self.valid_fingerprints
+                self.config["last_updated"] = datetime.now().isoformat()
+                self._save_config(self.config)
+                return True
+            self.alert_manager.send_certificate_alert(hostname, fingerprint, "Unknown certificate")
+            return False
+        except Exception as e:
+            self.alert_manager.send_certificate_alert(hostname, None, f"Validation failed: {str(e)}")
+            return False
+
+    def _get_certificate_details(self, hostname: str, port: int) -> Tuple[str, datetime]:
+        context = ssl.create_default_context()
+        with socket.create_connection((hostname, port), timeout=10) as sock:
+            with context.wrap_socket(sock, server_hostname=hostname) as ssock:
+                der = ssock.getpeercert(binary_form=True)
+                info = ssock.getpeercert()
+                fp = hashlib.sha256(der).hexdigest()
+                exp = datetime.strptime(info["notAfter"], "%b %d %H:%M:%S %Y %Z")
+                return fp, exp
+
+    def _check_expiration(self, expires: datetime, host: str) -> None:
+        if expires - datetime.utcnow() < timedelta(days=7):
+            self.alert_manager.send_certificate_alert(host, None, "Certificate expiring soon")
 
 class RateLimiter:
     """Simple async token bucket rate limiter."""
@@ -222,11 +313,7 @@ class SecureOHLCVDownloader:
     # Valid data sources
     VALID_SOURCES = {"yahoo", "alpha_vantage"}
 
-    # SHA256 fingerprint for Alpha Vantage SSL certificate (example value)
-    ALPHA_VANTAGE_FINGERPRINT = os.getenv(
-        "ALPHA_VANTAGE_FINGERPRINT",
-        "626ab34fbac6f21bd70928a741b93d7c5edda6af032dca527d17bffb8d34e523",
-    )
+
 
     # JSON schema for Alpha Vantage API response validation
     ALPHA_VANTAGE_SCHEMA = {
@@ -270,6 +357,7 @@ class SecureOHLCVDownloader:
         """
         self.output_dir = Path(output_dir).resolve()
         self.config = config or load_global_config(os.getenv("OHLCV_CONFIG_FILE"))
+        self.certificate_manager = CertificateManager()
         self.rate_limiter = RateLimiter(int(os.getenv("API_RATE", "5")), 60.0)
         self.circuit_breaker = CircuitBreaker(3, 60.0)
         self.cache = APICache(self.config.cache_ttl)
@@ -832,8 +920,12 @@ class SecureOHLCVDownloader:
         }
 
         try:
+            host = "www.alphavantage.co"
+            if not self.certificate_manager.validate_certificate(host):
+                raise SecurityError("Certificate validation failed")
+            fingerprint = self.certificate_manager.get_preferred_fingerprint()
             session = self._create_pinned_session(
-                "https://www.alphavantage.co", self.ALPHA_VANTAGE_FINGERPRINT
+                "https://www.alphavantage.co", fingerprint or ""
             )
             response = asyncio.run(
                 self._fetch_with_limit(
