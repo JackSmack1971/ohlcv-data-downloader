@@ -22,6 +22,7 @@ class GlobalConfig:
     max_memory_mb: int
     dir_permissions: int
     file_permissions: int
+    retention_days: int
 
 
 def load_global_config(path: Optional[str] = None) -> GlobalConfig:
@@ -58,6 +59,9 @@ def load_global_config(path: Optional[str] = None) -> GlobalConfig:
         file_permissions=_parse_oct(
             str(data.get("file_permissions", env("FILE_PERMISSIONS", "0o600"))),
             0o600,
+        ),
+        retention_days=int(
+            data.get("retention_days", env("RETENTION_DAYS", "2555"))
         ),
     )
 
