@@ -7,6 +7,8 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+import aiofiles
+
 from config import GlobalConfig
 from .encryption import EncryptionManager
 from .exceptions import SecurityError
@@ -40,16 +42,19 @@ class FileManager:
     async def save_encrypted(self, data: bytes, file_path: Path) -> None:
         encrypted = await asyncio.to_thread(self.encryption.encrypt, data)
         async with asyncio.Lock():
-            with open(file_path, "wb") as f:
-                f.write(encrypted)
-        os.chmod(file_path, self.config.file_permissions)
+            async with aiofiles.open(file_path, "wb") as f:
+                await f.write(encrypted)
+        await asyncio.to_thread(os.chmod, file_path, self.config.file_permissions)
 
-    def calculate_checksum(self, path: Path) -> str:
+    async def calculate_checksum(self, path: Path) -> str:
         import hashlib
 
         h = hashlib.sha256()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
+        async with aiofiles.open(path, "rb") as f:
+            while True:
+                chunk = await f.read(4096)
+                if not chunk:
+                    break
                 h.update(chunk)
         return h.hexdigest()
 

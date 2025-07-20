@@ -13,6 +13,15 @@ from src.secure_ohlcv_downloader import (
     SecurityError,
     CredentialError,
     ValidationError,
+    CertificateManager,
+    SecurePatternValidator,
+    SecureJSONValidator,
+    DataValidator,
+    APIClient,
+    EncryptionManager,
+    FileManager,
+    ConfigurationManager,
+    SecurityValidationError,
 )
 
 from dataclasses import dataclass
@@ -78,6 +87,15 @@ __all__ = [
     "ValidationError",
     "SecurityExceptionHandler",
     "DownloadConfig",
+    "CertificateManager",
+    "SecurePatternValidator",
+    "SecureJSONValidator",
+    "DataValidator",
+    "APIClient",
+    "EncryptionManager",
+    "FileManager",
+    "ConfigurationManager",
+    "SecurityValidationError",
 ]
 
 
