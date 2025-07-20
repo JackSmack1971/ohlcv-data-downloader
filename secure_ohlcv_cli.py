@@ -9,6 +9,7 @@ import asyncio
 import getpass
 import sys
 import re
+import requests
 from datetime import datetime, date
 from pathlib import Path
 from typing import Optional
