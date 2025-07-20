@@ -286,7 +286,10 @@ class SecureOHLCVDownloader:
     """
 
     # Valid ticker symbol pattern (alphanumeric, dots, hyphens, underscores)
-    TICKER_PATTERN = re.compile(r"^[A-Z0-9._-]{1,10}$")
+    try:
+        TICKER_PATTERN = regex.compile(r"^[A-Z0-9._-]{1,10}$", timeout=0.1)
+    except Exception:
+        TICKER_PATTERN = regex.compile(r"^[A-Z0-9._-]{1,10}$")
 
     # Pre-compiled date pattern with timeout to mitigate ReDoS
     try:
@@ -483,29 +486,21 @@ class SecureOHLCVDownloader:
             raise SecurityError("Available memory below configured limit")
 
     def _validate_ticker(self, ticker: str) -> str:
-        """
-        Validate and sanitize ticker symbol to prevent path traversal
-
-        Args:
-            ticker: Raw ticker symbol
-
-        Returns:
-            Validated ticker symbol
-
-        Raises:
-            ValidationError: If ticker is invalid
-        """
+        """Validate and sanitize ticker symbol."""
         if not ticker:
             raise ValidationError("Ticker symbol cannot be empty")
 
         # Convert to uppercase and strip whitespace
         ticker = ticker.upper().strip()
 
-        # Validate against pattern
-        if not self.TICKER_PATTERN.match(ticker):
-            raise ValidationError(
-                "Invalid ticker symbol format. Use only alphanumeric characters, dots, hyphens, and underscores"
-            )
+        # Validate against pattern with timeout protection
+        try:
+            if not self.TICKER_PATTERN.match(ticker):
+                raise ValidationError(
+                    "Invalid ticker symbol format. Use only alphanumeric characters, dots, hyphens, and underscores"
+                )
+        except regex.TimeoutError as exc:
+            raise SecurityError("Ticker validation timed out") from exc
 
         # Additional security check for path traversal attempts
         if ".." in ticker or "/" in ticker or "\\" in ticker:
