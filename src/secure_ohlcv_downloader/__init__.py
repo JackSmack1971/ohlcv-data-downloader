@@ -2,8 +2,21 @@
 
 from .downloader import SecureOHLCVDownloader
 from .certificate_manager import CertificateManager
-from .validation import SecurePatternValidator, SecureJSONValidator
-from .exceptions import SecurityError, ValidationError, SecurityValidationError
+from .validation import (
+    SecurePatternValidator,
+    SecureJSONValidator,
+    DataValidator,
+)
+from .api_client import APIClient
+from .encryption import EncryptionManager
+from .file_manager import FileManager
+from .configuration import ConfigurationManager
+from .exceptions import (
+    SecurityError,
+    ValidationError,
+    SecurityValidationError,
+    CredentialError,
+)
 
 __version__ = "1.0.0"
 __all__ = [
@@ -11,7 +24,13 @@ __all__ = [
     "CertificateManager",
     "SecurePatternValidator",
     "SecureJSONValidator",
+    "DataValidator",
+    "APIClient",
+    "EncryptionManager",
+    "FileManager",
+    "ConfigurationManager",
     "SecurityError",
     "ValidationError",
+    "CredentialError",
     "SecurityValidationError",
 ]

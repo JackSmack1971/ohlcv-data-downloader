@@ -8,6 +8,11 @@ class ValidationError(SecurityError):
     """Exception for validation failures."""
     pass
 
+
+class CredentialError(SecurityError):
+    """Exception raised for credential management issues."""
+    pass
+
 class SecurityValidationError(ValidationError):
     """Exception for security validation failures."""
     pass
