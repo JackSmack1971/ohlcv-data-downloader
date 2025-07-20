@@ -21,6 +21,12 @@ from config import GlobalConfig, load_global_config
 # Load environment variables
 load_dotenv()
 
+# Minimum data availability dates per source
+MIN_SOURCE_DATES = {
+    "yahoo": date(1962, 1, 1),
+    "alpha_vantage": date(1999, 1, 1),
+}
+
 # Import the secure downloader
 from secure_ohlcv_downloader import (
     SecureOHLCVDownloader,
@@ -174,11 +180,6 @@ Examples:
             # Business logic validation
             if parsed_date > date.today():
                 raise ValueError("Date cannot be in the future")
-
-            # Reasonable historical limit (prevent excessive API calls)
-            min_date = date(1900, 1, 1)
-            if parsed_date < min_date:
-                raise ValueError(f"Date cannot be before {min_date}")
 
             return parsed_date
 
@@ -336,6 +337,14 @@ Examples:
                 raise ValueError(
                     f"Date range too large (maximum {self.config.max_date_range_days} days)"
                 )
+
+            # Validate minimum data availability per source
+            min_source_date = MIN_SOURCE_DATES.get(args.source)
+            if min_source_date:
+                if args.start_date < min_source_date or args.end_date < min_source_date:
+                    raise ValueError(
+                        f"{args.source} data not available before {min_source_date}"
+                    )
 
             # Validate output directory
             if not args.output_dir.parent.exists():
