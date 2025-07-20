@@ -17,6 +17,7 @@ dependencies = [
     "regex>=2022.1.18",
     "keyring>=23.0.0",
     "psutil>=5.8.0",
+    "filelock>=3.13.1",
 ]
 
 [project.optional-dependencies]

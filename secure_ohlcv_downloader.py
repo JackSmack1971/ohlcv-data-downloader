@@ -20,6 +20,8 @@ from src.secure_ohlcv_downloader import (
     APIClient,
     EncryptionManager,
     FileManager,
+    CrossPlatformFileLockManager,
+    FileLockTimeoutError,
     ConfigurationManager,
     SecurityValidationError,
 )
@@ -94,6 +96,8 @@ __all__ = [
     "APIClient",
     "EncryptionManager",
     "FileManager",
+    "CrossPlatformFileLockManager",
+    "FileLockTimeoutError",
     "ConfigurationManager",
     "SecurityValidationError",
 ]

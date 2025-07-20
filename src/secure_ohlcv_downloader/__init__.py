@@ -10,6 +10,8 @@ from .validation import (
 from .api_client import APIClient
 from .encryption import EncryptionManager
 from .file_manager import FileManager
+from .file_lock import CrossPlatformFileLockManager
+from .exceptions import FileLockTimeoutError
 from .configuration import ConfigurationManager
 from .exceptions import (
     SecurityError,
@@ -28,9 +30,11 @@ __all__ = [
     "APIClient",
     "EncryptionManager",
     "FileManager",
+    "CrossPlatformFileLockManager",
     "ConfigurationManager",
     "SecurityError",
     "ValidationError",
     "CredentialError",
     "SecurityValidationError",
+    "FileLockTimeoutError",
 ]
