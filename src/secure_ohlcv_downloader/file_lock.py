@@ -20,7 +20,13 @@ class CrossPlatformFileLockManager:
 
     @contextmanager
     def secure_file_lock(self, file_path: str, timeout: float = 10.0):
-        """Context manager that acquires an exclusive lock on *file_path*."""
+        """Context manager that acquires an exclusive lock on *file_path*.
+
+        Attack scenario: concurrent processes writing to the same file could
+        corrupt data or expose race conditions. A per-file lock combined with
+        a timeout prevents indefinite blocking and signals a
+        :class:`FileLockTimeoutError` when contention occurs.
+        """
         lock_path = f"{file_path}.lock"
         with self._mutex:
             file_lock = self._locks.setdefault(lock_path, FileLock(lock_path))
@@ -44,7 +50,11 @@ class CrossPlatformFileLockManager:
         return lock.is_locked
 
     def cleanup_stale_locks(self) -> None:
-        """Remove lock files for which no process holds the lock."""
+        """Remove lock files for which no process holds the lock.
+
+        Mitigation strategy: cleans up orphaned lock files that might remain
+        after crashes, preventing future deadlocks on startup.
+        """
         with self._mutex:
             stale = [path for path, lock in self._locks.items() if not lock.is_locked]
             for path in stale:

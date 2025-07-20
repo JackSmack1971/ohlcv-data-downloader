@@ -72,6 +72,18 @@ class DataValidator:
         self.source_validator = ChoiceValidator({"yahoo", "alpha_vantage"})
 
     def validate_ticker(self, ticker: str) -> str:
+        """Validate a ticker symbol and reject malicious input.
+
+        Edge cases: empty strings and lower/upper case differences are
+        normalized before validation. The regex pattern limits length and
+        characters to mitigate injection or path traversal attempts.
+
+        Attack scenario: an attacker may try to pass ``../`` or extremely
+        long strings to traverse directories or trigger ReDoS. This method
+        enforces strict pattern matching and raises :class:`SecurityError`
+        when suspicious sequences are detected.
+        """
+
         if not ticker:
             raise ValidationError("Ticker symbol cannot be empty")
         ticker = ticker.upper().strip()
@@ -86,6 +98,18 @@ class DataValidator:
         return ticker
 
     def validate_date_range(self, start_date: date, end_date: date) -> None:
+        """Ensure the requested date range is within allowed limits.
+
+        Security assumption: ``start_date`` and ``end_date`` come from user
+        input and must be validated to prevent resource exhaustion. Large
+        ranges could trigger excessive API calls or large file writes.
+
+        Attack vector: specifying a far future ``end_date`` or extremely long
+        range may lead to denial of service. The method checks chronological
+        order, prevents future dates, and enforces a configurable maximum
+        window.
+        """
+
         if start_date > end_date:
             raise ValidationError("Start date must be before end date")
         if end_date > date.today():
@@ -95,12 +119,31 @@ class DataValidator:
             raise ValidationError(f"Date range too large. Maximum {max_days} days allowed")
 
     def validate_interval(self, interval: str) -> str:
+        """Validate allowed time intervals for API requests.
+
+        Only whitelisted intervals are accepted to avoid unexpected API
+        behavior. Invalid values raise :class:`ValidationError`.
+        """
+
         return self.interval_validator(interval, "interval")
 
     def validate_source(self, source: str) -> str:
+        """Validate data source identifier.
+
+        Accepts only known providers to prevent SSRF or unauthorized data
+        retrieval from arbitrary hosts.
+        """
+
         return self.source_validator(source, "source")
 
     def validate_date_key(self, key: str) -> None:
+        """Validate a date key used for data dictionaries.
+
+        Attack scenario: extremely long or malformed keys could corrupt
+        stored data structures. This method restricts the key to ``YYYY-MM-DD``
+        format and enforces a length limit.
+        """
+
         pattern = re.compile(r"^\d{4}-\d{2}-\d{2}$")
         if len(key) > 10:
             raise ValidationError("Date key length exceeds limit")
@@ -108,6 +151,13 @@ class DataValidator:
             raise ValidationError("Invalid date key format")
 
     def _validate_structure_limits(self, data: Any, depth: int = 0) -> None:
+        """Recursively enforce JSON structure limits.
+
+        Depth and size checks defend against maliciously crafted responses
+        attempting to exhaust memory (e.g., deeply nested arrays). Limits are
+        conservative to balance functionality with safety.
+        """
+
         if depth > 10:
             raise ValidationError("JSON depth exceeds limit")
         if isinstance(data, dict):
@@ -126,6 +176,14 @@ class DataValidator:
             raise ValidationError("String too long")
 
     def validate_json_response(self, response_data: Dict[Any, Any], schema: Dict[Any, Any]) -> None:
+        """Validate API JSON responses against a schema.
+
+        Potential attack vector: a server may return oversized or deeply
+        nested JSON to trigger memory exhaustion or bypass client logic. The
+        method enforces structural limits before delegating to a schema
+        validator and raises :class:`ValidationError` on any deviation.
+        """
+
         self._validate_structure_limits(response_data)
         try:
             self.json_validator.validate_json_with_limits(json.dumps(response_data), schema)
