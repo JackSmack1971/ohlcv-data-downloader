@@ -1,24 +1,42 @@
 """Input validation with security controls."""
 
 import json
-import re
+import time
+import regex
 from datetime import date
 from typing import Any, Dict, Set
+from dataclasses import dataclass
 
 from config import GlobalConfig
-from .exceptions import ValidationError, SecurityError
+from .exceptions import ValidationError, SecurityError, SecurityValidationError
+
+
+@dataclass
+class TimedPattern:
+    pattern: regex.Pattern[str]
+    timeout: float
+
+    def match(self, string: str) -> regex.Match | None:
+        return self.pattern.match(string, timeout=self.timeout)
 
 class SecurePatternValidator:
     """Pattern validation with ReDoS protection."""
 
-    # Placeholder patterns (will be replaced with regex module)
-    TICKER_PATTERN = re.compile(r"^[A-Z0-9._-]{1,10}$")
+    TICKER_PATTERN = TimedPattern(regex.compile(r"^[A-Z0-9._-]{1,10}$"), 0.1)
+    DATE_PATTERN = TimedPattern(regex.compile(r"^\d{4}-\d{2}-\d{2}$"), 0.1)
 
     @classmethod
-    def validate_with_timeout(cls, pattern: re.Pattern[str], input_string: str,
-                               max_length: int = 1000) -> bool:
-        """Validate with timeout protection."""
-        return bool(pattern.match(input_string))
+    def validate_with_timeout(
+        cls, pattern: TimedPattern, input_string: str, max_length: int = 1000
+    ) -> bool:
+        """Validate input with timeout protection."""
+        if len(input_string) > max_length:
+            raise SecurityValidationError(f"Input exceeds maximum length {max_length}")
+
+        try:
+            return bool(pattern.match(input_string))
+        except regex.TimeoutError as exc:
+            raise SecurityValidationError("Input validation timeout") from exc
 
 class SecureJSONValidator:
     """JSON validation with resource protection."""
@@ -144,10 +162,11 @@ class DataValidator:
         format and enforces a length limit.
         """
 
-        pattern = re.compile(r"^\d{4}-\d{2}-\d{2}$")
         if len(key) > 10:
             raise ValidationError("Date key length exceeds limit")
-        if not pattern.fullmatch(key):
+        if not self.pattern_validator.validate_with_timeout(
+            SecurePatternValidator.DATE_PATTERN, key, max_length=10
+        ):
             raise ValidationError("Invalid date key format")
 
     def _validate_structure_limits(self, data: Any, depth: int = 0) -> None:
