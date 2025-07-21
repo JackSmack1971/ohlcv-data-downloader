@@ -1,6 +1,8 @@
 """Main secure OHLCV downloader implementation."""
 
 import asyncio
+import logging
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -50,6 +52,31 @@ class SecureOHLCVDownloader:
         return msg.replace("/", "[PATH_REDACTED]")
 
     async def cleanup_expired_data(self, days: int) -> None:
-        pass
+        """Remove files older than *days* from the output directory."""
+        root = (self.output_dir / "data").resolve()
+        logger = logging.getLogger(__name__)
+        if not root.exists():
+            return
+
+        cutoff = (datetime.now() - timedelta(days=days)).timestamp()
+        removed = 0
+        for file_path in root.rglob("*"):
+            if not file_path.is_file():
+                continue
+            try:
+                if file_path.stat().st_mtime < cutoff:
+                    await self.file_manager.remove_path(file_path)
+                    removed += 1
+            except OSError as exc:
+                logger.warning("Failed to remove %s: %s", file_path, self._sanitize_error(str(exc)))
+
+        for directory in sorted((p for p in root.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+            try:
+                if not any(directory.iterdir()):
+                    await self.file_manager.remove_path(directory)
+            except OSError as exc:
+                logger.warning("Failed to clean directory %s: %s", directory, self._sanitize_error(str(exc)))
+
+        logger.info("Cleanup removed %d expired files", removed)
 
 
