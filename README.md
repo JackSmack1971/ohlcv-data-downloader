@@ -36,6 +36,18 @@ Download the following files to your project directory:
 pip install -r requirements-secure.txt
 ```
 
+### 2b. Install Development Dependencies
+
+Install additional tools for code quality and security checks:
+```bash
+pip install -r requirements-dev.txt
+```
+
+Run the validation suite to verify your environment:
+```bash
+python scripts/run_validation.py
+```
+
 Or install manually:
 ```bash
 pip install pandas yfinance alpha-vantage requests python-dotenv matplotlib plotly
