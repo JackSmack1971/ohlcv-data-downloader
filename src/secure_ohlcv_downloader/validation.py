@@ -2,13 +2,19 @@
 
 import json
 import time
+import threading
 import regex
 from datetime import date
 from typing import Any, Dict, Set
 from dataclasses import dataclass
 
 from config import GlobalConfig
-from .exceptions import ValidationError, SecurityError, SecurityValidationError
+from .exceptions import (
+    ValidationError,
+    SecurityError,
+    SecurityValidationError,
+    JSONValidationError,
+)
 
 
 @dataclass
@@ -41,14 +47,64 @@ class SecurePatternValidator:
 class SecureJSONValidator:
     """JSON validation with resource protection."""
 
+    MAX_JSON_DEPTH = 10
+    MAX_OBJECT_PROPERTIES = 1000
+    MAX_ARRAY_LENGTH = 10000
+    MAX_STRING_LENGTH = 10000
+    PARSE_TIMEOUT = 5.0
+
     def __init__(self) -> None:
         """Initialize JSON validator."""
         pass
 
+    def _parse_with_timeout(self, json_data: str) -> Dict[str, Any]:
+        result: Dict[str, Any] = {}
+        error: Dict[str, Exception] = {}
+
+        def worker() -> None:
+            try:
+                result["data"] = json.loads(json_data)
+            except Exception as exc:  # pragma: no cover - json failure path
+                error["error"] = exc
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        thread.join(self.PARSE_TIMEOUT)
+        if thread.is_alive():
+            raise SecurityValidationError("JSON parsing timeout")
+        if error:
+            raise JSONValidationError(str(error["error"]))
+        return result.get("data", {})
+
+    def _validate_structure_limits(self, data: Any, depth: int = 0) -> None:
+        if depth > self.MAX_JSON_DEPTH:
+            raise SecurityValidationError("JSON depth exceeds limit")
+        if isinstance(data, dict):
+            if len(data) > self.MAX_OBJECT_PROPERTIES:
+                raise SecurityValidationError("Object has too many properties")
+            for k, v in data.items():
+                if len(str(k)) > self.MAX_STRING_LENGTH:
+                    raise SecurityValidationError("Property key too long")
+                self._validate_structure_limits(v, depth + 1)
+        elif isinstance(data, list):
+            if len(data) > self.MAX_ARRAY_LENGTH:
+                raise SecurityValidationError("Array too large")
+            for item in data:
+                self._validate_structure_limits(item, depth + 1)
+        elif isinstance(data, str) and len(data) > self.MAX_STRING_LENGTH:
+            raise SecurityValidationError("String too long")
+
     def validate_json_with_limits(self, json_data: str, schema: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate JSON with security limits."""
-        import json
-        return json.loads(json_data)
+        if len(json_data) > self.MAX_STRING_LENGTH * 10:
+            raise SecurityValidationError("JSON data too large")
+        parsed = self._parse_with_timeout(json_data)
+        self._validate_structure_limits(parsed)
+        try:
+            import jsonschema
+            jsonschema.validate(instance=parsed, schema=schema)
+        except jsonschema.ValidationError as exc:
+            raise JSONValidationError(f"Schema validation failed: {exc}") from exc
+        return parsed
 
 
 class ChoiceValidator:
