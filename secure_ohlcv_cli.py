@@ -452,53 +452,53 @@ Examples:
             print(f"❌ Validation Error: {e}")
             sys.exit(1)
 
+    def _handle_special_commands(self, args: argparse.Namespace) -> bool:
+        """Handle CLI options that exit early."""
+        if args.check_env:
+            self._check_environment()
+            return True
+        return False
+
+    def _execute_download(self, args: argparse.Namespace) -> None:
+        """Validate inputs, setup environment, and run download."""
+        self._validate_arguments(args)
+        self._setup_secure_environment(args)
+
+        config = DownloadConfig(
+            ticker=args.ticker,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            interval=args.interval,
+            source=args.source,
+            encrypt_data=args.encrypt,
+        )
+
+        print("🚀 Starting secure download...")
+        print(f"   Ticker: {config.ticker}")
+        print(f"   Source: {config.source}")
+        print(f"   Date Range: {config.start_date} to {config.end_date}")
+        print(f"   Interval: {config.interval}")
+        print(f"   Encryption: {'Enabled' if config.encrypt_data else 'Disabled'}")
+
+        file_path = self.downloader.download_data(config)
+
+        print("✅ Download completed successfully!")
+        print(f"   File saved: {file_path}")
+        print(f"   Check logs: {args.output_dir}/secure_downloader.log")
+
     def run(self) -> None:
-        """
-        Main CLI execution with comprehensive error handling
-        """
+        """Main CLI execution with comprehensive error handling."""
         parser = self.create_parser()
         args = parser.parse_args()
 
-        # Handle special commands
-        if args.check_env:
-            self._check_environment()
+        if self._handle_special_commands(args):
             return
 
         try:
-            # Validate arguments
-            self._validate_arguments(args)
-
-            # Setup secure environment
-            self._setup_secure_environment(args)
-
-            # Create download configuration
-            config = DownloadConfig(
-                ticker=args.ticker,
-                start_date=args.start_date,
-                end_date=args.end_date,
-                interval=args.interval,
-                source=args.source,
-                encrypt_data=args.encrypt,
-            )
-
-            # Execute download
-            print(f"🚀 Starting secure download...")
-            print(f"   Ticker: {config.ticker}")
-            print(f"   Source: {config.source}")
-            print(f"   Date Range: {config.start_date} to {config.end_date}")
-            print(f"   Interval: {config.interval}")
-            print(f"   Encryption: {'Enabled' if config.encrypt_data else 'Disabled'}")
-
-            file_path = self.downloader.download_data(config)
-
-            print(f"✅ Download completed successfully!")
-            print(f"   File saved: {file_path}")
-            print(f"   Check logs: {args.output_dir}/secure_downloader.log")
-
+            self._execute_download(args)
         except KeyboardInterrupt:
             print("\n⚠️  Download interrupted by user")
             sys.exit(1)
-
         except (ValidationError, SecurityError, CredentialError, OSError, requests.RequestException) as e:
             print(f"❌ Security/Validation Error: {e}")
             sys.exit(1)
